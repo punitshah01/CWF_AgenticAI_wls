@@ -20,7 +20,6 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 import time
 from collections import OrderedDict
@@ -95,7 +94,7 @@ def main() -> None:
     pf_info  = get_platform_info()
 
     print(f"\n{'='*60}")
-    print(f"  CWF Agentic AI Runner")
+    print("  CWF Agentic AI Runner")
     print(f"  Benchmark : {args.benchmark}")
     print(f"  Run ID    : {run_id}")
     print(f"  Platform  : {platform} ({pf_info['short_name']})")

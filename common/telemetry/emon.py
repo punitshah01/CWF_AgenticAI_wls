@@ -15,13 +15,11 @@ Functions:
 """
 
 import os
-import re
 import signal
 import subprocess
-import time
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 
 # ── Constants (mirror pnpwls defaults) ────────────────────────────────────────
@@ -240,7 +238,7 @@ def _read_emon_csv(csv_file: Path) -> Tuple[str, str]:
     """
     try:
         with open(csv_file) as f:
-            lines = [l.strip() for l in f if l.strip()]
+            lines = [ln.strip() for ln in f if ln.strip()]
         if len(lines) < 2:
             return "", ""
         header = lines[0]

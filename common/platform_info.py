@@ -23,7 +23,7 @@ Usage:
 
 import subprocess
 import re
-from typing import Dict, Optional
+from typing import Dict
 
 
 # ── Platform table ────────────────────────────────────────────────────────────

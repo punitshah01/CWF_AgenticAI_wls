@@ -14,10 +14,8 @@ Usage:
     common_data.update(ctx.sys_meta)
 """
 
-import os
 import subprocess
 from collections import OrderedDict
-from typing import Optional
 
 from .cpu_info import CPUInfo
 from .os_info import OSInfo

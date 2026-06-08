@@ -6,7 +6,6 @@ Intel Platform Telemetry and Analytics Tool — for older platforms (pre-DMR/CWF
 
 import os
 import subprocess
-import time
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional

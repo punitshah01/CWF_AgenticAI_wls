@@ -11,11 +11,10 @@ Classes:
     RaplCollector  — snapshot and streaming RAPL power
 """
 
-import os
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 _POWERCAP_BASE = Path("/sys/class/powercap")

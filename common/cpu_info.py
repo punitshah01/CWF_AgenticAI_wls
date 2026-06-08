@@ -10,7 +10,7 @@ Classes:
 
 import subprocess
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict
 
 
 class CPUInfo:

@@ -8,7 +8,7 @@ All methods read fresh from the system (no caching) to ensure live state.
 
 import subprocess
 import re
-from typing import List, Optional
+from typing import List
 
 
 class OSInfo:

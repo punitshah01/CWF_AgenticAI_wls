@@ -44,7 +44,7 @@ def write_csv_row(
 
         if file_exists:
             with open(csv_file, "r") as f:
-                lines = [l for l in f.readlines() if l.strip()]
+                lines = [line for line in f.readlines() if line.strip()]
             if not lines:
                 write_header = True
             else:

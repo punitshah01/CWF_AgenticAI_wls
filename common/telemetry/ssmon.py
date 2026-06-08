@@ -6,10 +6,9 @@ Supports newer platforms: Diamond Rapids and Clearwater Forest.
 
 import os
 import subprocess
-import time
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 
 class TelemetryStatus(Enum):
