@@ -19,6 +19,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+if sys.version_info < (3, 10):
+    sys.exit(f"[ERROR] Python 3.10+ required. Current: {sys.version.split()[0]}")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 

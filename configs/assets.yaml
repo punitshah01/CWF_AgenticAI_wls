@@ -173,7 +173,7 @@ large_files:
 
   # ── SWE-bench datasets (Parquet, direct HuggingFace download) ─────────
   swebench_lite_test:
-    url: "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite/resolve/main/data/test-00000-of-00001.parquet"
+    url: "https://huggingface.co/datasets/SWE-bench/SWE-bench_Lite/resolve/main/data/test-00000-of-00001.parquet"
     dest: "assets/datasets/swebench_lite_test.parquet"
     size_gb: 0.05
     sha256: ""
@@ -182,13 +182,25 @@ large_files:
     required: true
 
   swebench_verified_test:
-    url: "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified/resolve/main/data/test-00000-of-00001.parquet"
+    url: "https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified/resolve/main/data/test-00000-of-00001.parquet"
     dest: "assets/datasets/swebench_verified_test.parquet"
     size_gb: 0.08
     sha256: ""
     description: "SWE-bench Verified test split (500 tasks)"
     benchmark: swebench
     required: false
+
+  # ── SWE-bench source repo (git clone, not wget) ────────────────────────
+  # NOTE: This is a git clone, not a direct file download. prefetch_assets.py
+  # documents it here for awareness; the actual clone is done by setup.py.
+  # swebench_repo:
+  #   url: "https://github.com/SWE-bench/SWE-bench.git"
+  #   dest: "~/cwf_agentic/swebench"    (outside repo root)
+  #   size_gb: 0.5
+  #   description: "SWE-bench evaluation harness source code"
+  #   benchmark: swebench
+  #   required: true
+  #   method: git_clone   # not handled by prefetch_assets.py wget
 
   # ── Miniconda installer (avoids re-downloading during setup) ──────────
   miniconda_installer:
@@ -199,6 +211,40 @@ large_files:
     description: "Miniconda3 Linux x86_64 installer"
     benchmark: all
     required: false
+
+  # ── GGUF model files for llama.cpp (pre-download for offline use) ──────
+  # Use: python3 scripts/prefetch_assets.py pull --benchmarks all
+  # Models are stored in assets/models/ and referenced by start_llamacpp.py
+  # via --models-dir. Sizes are approximate compressed GGUF sizes.
+  llama3_8b_q4km:
+    url: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+    dest: "assets/models/llama-3.1-8b-instruct-q4_k_m.gguf"
+    size_gb: 4.9
+    sha256: ""
+    description: "Llama 3.1 8B Instruct Q4_K_M — primary model for AppWorld and T-Bench"
+    benchmark: all
+    required: false
+
+  qwen25_coder_32b_q4km:
+    url: "https://huggingface.co/bartowski/Qwen2.5-Coder-32B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf"
+    dest: "assets/models/qwen2.5-coder-32b-instruct-q4_k_m.gguf"
+    size_gb: 19.5
+    sha256: ""
+    description: "Qwen 2.5 Coder 32B Q4_K_M — recommended for SWE-bench and WebArena"
+    benchmark: all
+    required: false
+
+  # ── AppWorld data bundle ───────────────────────────────────────────────
+  # NOTE: AppWorld data is downloaded via `appworld install && appworld download data`
+  # (post-install step in scripts/setup.py). It requires internet access and cannot
+  # be pre-downloaded as a single file. Estimated size: ~5-10 GB.
+  # This entry documents the requirement; no wget URL available.
+  # appworld_data:
+  #   method: appworld_cli   # appworld install && appworld download data
+  #   size_gb: 10
+  #   description: "AppWorld encrypted data bundles (tasks, app DBs)"
+  #   benchmark: appworld
+  #   required: true
 
 # ── pip / conda wheel cache ───────────────────────────────────────────────
 # Cache directories — no download config needed, just document the paths

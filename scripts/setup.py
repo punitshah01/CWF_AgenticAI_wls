@@ -37,6 +37,14 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# ── Python version guard ──────────────────────────────────────────────────────
+# setup.py itself requires Python 3.10+; individual benchmarks may require 3.11
+if sys.version_info < (3, 10):
+    sys.exit(
+        f"[ERROR] Python 3.10+ required to run setup.py. "
+        f"Current: {sys.version.split()[0]}"
+    )
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ── Constants
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,51 +163,77 @@ BENCH_SYSTEM_PKGS: Dict[str, Dict[str, str]] = {
 
 # SWE-bench pyproject.toml  [project].dependencies + core extras
 # Source: github.com/SWE-bench/SWE-bench/blob/main/pyproject.toml
+# NOTE: sweagent must be installed separately from its own repo or via
+#       pip install swe-agent[all] — added here so the conda env is ready.
 SWEBENCH_PIP: List[str] = [
     "swebench",        # installs via pip -e . after git clone, but also on PyPI
-    # core deps (in case installing without repo)
+    "swe-agent",       # SWE-agent prediction generator (sweagent.run.run_batch)
+    # core deps
     "beautifulsoup4",
     "chardet",
-    "datasets",
-    "docker",
+    "datasets>=2.14",
+    "docker>=6.0",
     "ghapi",
     "GitPython",
     "modal",
     "python-dotenv",
-    "requests",
-    "rich",
+    "requests>=2.28.0",
+    "rich>=13.0",
     "tenacity",
-    "tqdm",
+    "tqdm>=4.60",
     "unidiff",
-    # optional inference/datasets extras
+    # inference/datasets extras
     "protobuf",
     "sentencepiece",
     "tiktoken",
-    "transformers",
-    "openai",
+    # NOTE on transformers: WebArena pins 4.33.2; OSWorld pins ~4.35.2.
+    # If installing SWE-bench with WebArena in the same env use ~4.35.2 as
+    # least-restrictive compatible version. Use separate conda envs if
+    # strict 4.33.2 is required for WebArena (--benchmarks webarena only).
+    "transformers>=4.35.2",
+    # NOTE on openai: WebArena hard-pins 0.27.0 (legacy v0 SDK); all others
+    # require v1+. If running WebArena alongside SWE-bench/OSWorld you MUST
+    # use separate conda envs (--benchmarks webarena in its own env).
+    # SWE-bench itself supports both; pin to latest v1 here.
+    "openai>=1.0",
     "anthropic",
     "jedi",
-    "pytest",
+    "pytest>=7.0",
     "pytest-cov",
 ]
 
 # WebArena requirements.txt
 # Source: github.com/web-arena-x/webarena/blob/main/requirements.txt
+# ⚠️  ISOLATION WARNING: WebArena requires openai==0.27.0 (legacy v0 API) which
+#    is INCOMPATIBLE with SWE-bench/OSWorld (openai>=1.0).  If you install
+#    WebArena alongside other benchmarks in the same conda env, pip will
+#    downgrade openai to 0.27.0 and break SWE-bench/OSWorld calls.
+#    Recommended: use --benchmarks webarena in a SEPARATE conda env, or
+#    run WebArena alone: python3 scripts/setup.py --benchmarks webarena
+# WebArena requirements.txt
+# Source: github.com/web-arena-x/webarena/blob/main/requirements.txt
+# ⚠️  ISOLATION WARNING: WebArena requires openai==0.27.0 (legacy v0 API) which
+#    is INCOMPATIBLE with SWE-bench / OSWorld (openai>=1.0). Installing WebArena
+#    alongside other benchmarks in the SAME conda env will downgrade openai and
+#    break those workloads.
+#    RECOMMENDATION: install WebArena in its own conda env:
+#      python3 scripts/setup.py --benchmarks webarena --conda-env webarena_env
 WEBARENA_PIP: List[str] = [
     "gymnasium",
     "playwright==1.32.1",
-    "Pillow",
+    "Pillow>=9.0",
     "evaluate",
-    "openai==0.27.0",
+    "openai==0.27.0",               # WebArena hard-requires legacy v0 API
     "types-tqdm",
     "tiktoken",
     "aiolimiter",
     "beartype==0.12.0",
-    "flask",
+    "flask>=2.0",
     "nltk",
     "text-generation",
-    "transformers==4.33.2",
+    "transformers>=4.33.2,<4.40",   # upstream pins 4.33.2; allow patch updates
 ]
+
 
 # OSWorld requirements.txt (full list)
 # Source: github.com/xlang-ai/OSWorld/blob/main/requirements.txt
@@ -334,12 +368,15 @@ TBENCH_PIP: List[str] = [
 ]
 
 # Common inference stack (shared across all benchmarks)
+# pyyaml: required by prefetch_assets.py and telemetry_config.yaml loading
+# huggingface_hub[cli]: provides `huggingface-cli download` for GGUF model fetching
 INFERENCE_PIP: List[str] = [
-    "vllm",           # vLLM with CPU/OpenVINO backend
-    "huggingface_hub",
+    "vllm",                      # vLLM with CPU/OpenVINO backend
+    "huggingface_hub[cli]>=0.23", # also provides huggingface-cli for GGUF download
     "accelerate",
     "sentencepiece",
     "tokenizers",
+    "pyyaml>=6.0",               # required by prefetch_assets.py + telemetry_config
 ]
 
 # Consolidated map
@@ -917,6 +954,17 @@ def main() -> None:
     print(f"  pip cache: {args.pip_cache_dir or '(default)'}")
     print(f"  Dry run  : {args.dry_run}")
     print()
+
+    # ── WebArena isolation warning
+    if "webarena" in args.benchmarks and len(args.benchmarks) > 1:
+        log(
+            "⚠️  WebArena requires openai==0.27.0 (legacy v0 API), which conflicts "
+            "with openai>=1.0 required by SWE-bench / OSWorld. "
+            "Installing together in one conda env WILL break those workloads. "
+            "Recommended: use a separate conda env for WebArena: "
+            "--benchmarks webarena --conda-env webarena_env",
+            "warn",
+        )
 
     # ── System packages
     if not args.skip_system:

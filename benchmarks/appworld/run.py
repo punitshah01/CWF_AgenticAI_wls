@@ -30,6 +30,9 @@ import os
 import subprocess
 import sys
 import time
+
+if sys.version_info < (3, 11):
+    sys.exit(f"[ERROR] Python 3.11+ required for AppWorld. Current: {sys.version.split()[0]}")
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path

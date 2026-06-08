@@ -40,6 +40,7 @@ Registry override (choose one)
 Usage
 -----
   python3 scripts/prefetch_assets.py pull [--benchmarks swebench webarena] [--include-optional]
+  python3 scripts/prefetch_assets.py pull-models [--models 8b 32b]  # download GGUF files
   python3 scripts/prefetch_assets.py push [--registry <url>]
   python3 scripts/prefetch_assets.py status
   python3 scripts/prefetch_assets.py start-registry [--port 5000]
@@ -47,6 +48,15 @@ Usage
   python3 scripts/prefetch_assets.py export-tar --out /path/to/archive.tar.gz
   python3 scripts/prefetch_assets.py import-tar --in /path/to/archive.tar.gz
   python3 scripts/prefetch_assets.py --dry-run pull
+
+Internet-access requirements by benchmark
+------------------------------------------
+  SWE-bench  : Docker images (DockerHub) + git clone SWE-bench/SWE-bench + dataset (HuggingFace)
+  WebArena   : 6 Docker images (DockerHub)
+  OSWorld    : Docker image + 2 QEMU VM images (HuggingFace, ~19 GB total)
+  AppWorld   : `appworld install` + `appworld download data` (~10 GB, no wget URL)
+  T-Bench    : pip packages only — no large downloads
+  Inference  : GGUF model files (HuggingFace, bartowski repos) OR vLLM auto-download
 """
 
 import argparse
@@ -543,7 +553,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "action",
-        choices=["pull", "push", "start-registry", "stop-registry",
+        choices=["pull", "pull-models", "push", "start-registry", "stop-registry",
                  "status", "export-tar", "import-tar"],
         help="Action to perform",
     )
@@ -587,10 +597,77 @@ def parse_args() -> argparse.Namespace:
         help="Input archive path for import-tar",
     )
     parser.add_argument(
+        "--models", nargs="+", default=["8b", "32b"],
+        choices=["8b", "32b", "32b-qwen", "70b"],
+        help="GGUF model sizes to download for pull-models action. Default: 8b 32b",
+    )
+    parser.add_argument(
+        "--quant", default="Q4_K_M",
+        help="GGUF quantization format. Default: Q4_K_M",
+    )
+    parser.add_argument(
+        "--models-dir", default="assets/models",
+        help="Directory to store downloaded GGUF files. Default: assets/models",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print commands without executing them",
     )
     return parser.parse_args()
+
+
+# ── GGUF model download ────────────────────────────────────────────────────────
+
+# Maps model size shortcut → (HF repo, filename template)
+_GGUF_MODELS = {
+    "8b":      ("bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+                "Meta-Llama-3.1-8B-Instruct-{quant}.gguf"),
+    "32b":     ("bartowski/Qwen2.5-Coder-32B-Instruct-GGUF",
+                "Qwen2.5-Coder-32B-Instruct-{quant}.gguf"),
+    "32b-qwen":("bartowski/Qwen2.5-32B-Instruct-GGUF",
+                "Qwen2.5-32B-Instruct-{quant}.gguf"),
+    "70b":     ("bartowski/Meta-Llama-3.1-70B-Instruct-GGUF",
+                "Meta-Llama-3.1-70B-Instruct-{quant}.gguf"),
+}
+
+_GGUF_SIZES_GB = {"8b": 4.9, "32b": 19.5, "32b-qwen": 19.5, "70b": 40.0}
+
+
+def pull_models(model_sizes: List[str], quant: str, models_dir: Path,
+                dry_run: bool) -> None:
+    """Download GGUF model files via huggingface-cli."""
+    banner(f"Downloading GGUF models ({', '.join(model_sizes)}, quant={quant})")
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    if not shutil.which("huggingface-cli"):
+        log("huggingface-cli not found. Install with: pip install huggingface_hub[cli]", "error")
+        if not dry_run:
+            return
+
+    for size in model_sizes:
+        entry = _GGUF_MODELS.get(size)
+        if not entry:
+            log(f"Unknown model size: {size}", "warn")
+            continue
+        hf_repo, filename_tmpl = entry
+        filename = filename_tmpl.format(quant=quant)
+        dest = models_dir / filename.lower()
+        size_gb = _GGUF_SIZES_GB.get(size, 0)
+
+        if dest.exists() and not dry_run:
+            log(f"  {filename} already cached at {dest}", "ok")
+            continue
+
+        log(f"  Downloading {size} ({size_gb:.1f} GB): {hf_repo} / {filename}", "info")
+        cmd = (
+            f"huggingface-cli download {hf_repo} "
+            f"--include '*{quant}*' "
+            f"--local-dir {models_dir}"
+        )
+        run(cmd, dry_run=dry_run, check=False)
+
+    log("Model download complete. Pass --models-dir to start_llamacpp.py:", "ok")
+    print(f"    python3 scripts/inference/start_llamacpp.py --models-dir {models_dir} --model 8b")
 
 
 def main() -> None:
@@ -617,6 +694,11 @@ def main() -> None:
     # ── stop-registry ─────────────────────────────────────────────────────
     if args.action == "stop-registry":
         stop_registry(args.dry_run)
+        return
+
+    # ── pull-models ───────────────────────────────────────────────────────
+    if args.action == "pull-models":
+        pull_models(args.models, args.quant, Path(args.models_dir), args.dry_run)
         return
 
     # ── pull ──────────────────────────────────────────────────────────────

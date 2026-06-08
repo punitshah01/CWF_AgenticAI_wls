@@ -28,6 +28,9 @@ import argparse
 import subprocess
 import sys
 import time
+
+if sys.version_info < (3, 10):
+    sys.exit(f"[ERROR] Python 3.10+ required. Current: {sys.version.split()[0]}")
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
