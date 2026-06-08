@@ -16,7 +16,16 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      - run: ruff check common/ src/ scripts/setup.py --ignore E501
+      - run: |
+          ruff check \
+            common/ src/ \
+            misc/ \
+            scripts/setup.py \
+            scripts/setup/ \
+            scripts/inference/ \
+            scripts/prefetch_assets.py \
+            setup/ \
+            --ignore E501
 
   import-smoke:
     name: Import Smoke Test
@@ -39,14 +48,19 @@ jobs:
           "
       - name: Verify setup.py --list
         run: python3 scripts/setup.py --list
-
-  shell-syntax:
-    name: Shell Syntax Check (bash -n)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check misc/ scripts
+      - name: Verify misc scripts importable
         run: |
-          for f in misc/*.sh setup/*.sh scripts/setup/*.sh scripts/inference/*.sh; do
-            bash -n "$f" && echo "OK: $f" || echo "FAIL: $f"
-          done
+          python3 -c "
+          import sys; sys.path.insert(0, '.')
+          import ast, pathlib
+          for f in pathlib.Path('misc').glob('*.py'):
+              ast.parse(f.read_text())
+          for f in pathlib.Path('scripts/setup').glob('*.py'):
+              ast.parse(f.read_text())
+          for f in pathlib.Path('scripts/inference').glob('*.py'):
+              ast.parse(f.read_text())
+          for f in pathlib.Path('setup').glob('*.py'):
+              ast.parse(f.read_text())
+          print('All Python scripts parse OK')
+          "
+
