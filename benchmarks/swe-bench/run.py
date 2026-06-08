@@ -48,9 +48,9 @@ from common.telemetry import TelemetryManager
 
 BENCHMARK = "swebench"
 DATASET_MAP = {
-    "lite":     "princeton-nlp/SWE-bench_Lite",
-    "verified": "princeton-nlp/SWE-bench_Verified",
-    "full":     "princeton-nlp/SWE-bench",
+    "lite":     "SWE-bench/SWE-bench_Lite",
+    "verified": "SWE-bench/SWE-bench_Verified",
+    "full":     "SWE-bench/SWE-bench",
 }
 WORKDIR = Path.home() / "cwf_agentic" / "swebench"
 
@@ -120,6 +120,7 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
         f"--predictions_path={predictions}",
         f"--max_workers={args.max_workers}",
         f"--run_id={run_id}",
+        # CWF is x86_64: no --namespace '' needed (that flag is for ARM only)
     ]
 
     results = {

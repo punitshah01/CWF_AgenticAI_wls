@@ -799,7 +799,7 @@ def post_install_swebench(conda_env: str, dry_run: bool) -> None:
     run(
         f"conda run -n {conda_env} python -m swebench.harness.run_evaluation "
         f"--predictions_path gold --max_workers 1 "
-        f"--instance_ids sympy__sympy-20590 --run_id cwf_validate",
+        f"--instance_ids sympy__sympy-20590 --run_id validate-gold",
         dry_run=dry_run, check=False,
     )
     log("SWE-bench validation done", "ok")

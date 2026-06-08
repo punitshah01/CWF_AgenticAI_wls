@@ -56,7 +56,7 @@ python -m sweagent.run.run_batch \
     --agent.model.base_url http://localhost:8000/v1 \
     --env.repo.base_commit HEAD \
     --instances.type swe_bench \
-    --instances.dataset_name princeton-nlp/SWE-bench_Lite \
+    --instances.dataset_name SWE-bench/SWE-bench_Lite \
     --instances.split test
 ```
 
@@ -71,10 +71,11 @@ python3 benchmarks/swe-bench/run.py --dry-run   # preview config
 Manual evaluate only:
 ```python
 python -m swebench.harness.run_evaluation \
-    --dataset_name princeton-nlp/SWE-bench_Lite \
+    --dataset_name SWE-bench/SWE-bench_Lite \
     --predictions_path <path_to_predictions.jsonl> \
     --max_workers 8 \
     --run_id cwf_baseline
+    # CWF is x86_64 — no --namespace '' needed (ARM-only flag)
 ```
 
 ---
@@ -83,7 +84,8 @@ python -m swebench.harness.run_evaluation \
 
 - `max_workers` = number of parallel Docker containers
 - Each container uses ~4–8 GB RAM and ~4 cores burst
-- **CWF BKM:** `max_workers = min(int(0.75 * nproc), 24)`
+- **Upstream BKM:** `max_workers = min(int(0.75 * os.cpu_count()), 24)`
+- `run.py --max-workers` enforces this automatically
 - Pin containers to env cores: `--env-cores 32` in `run.py` sets taskset automatically
 - Leave cores 0–63 for LLM inference
 
