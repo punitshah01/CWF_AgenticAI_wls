@@ -1,0 +1,72 @@
+# =============================================================================
+# Telemetry Configuration — CWF Agentic AI Workloads
+# Mirror of pnpwls/common/telemetry/telemetry_config.yaml
+# =============================================================================
+
+tools:
+  sep_dir:        "/opt/intel/sep"
+  ptat_binary:    "$HOME/devtools/ptat/ptat"
+  ssmon_binary:   "$HOME/devtools/ssmon/ssmon"
+
+emon:
+  edp_dir:             "/opt/intel/sep/config/edp"
+  collect_edp:          true
+  process_data:         true
+  socket_view:          true
+  core_view:            false
+  uncore_view:          false
+  detailed_view:        false
+
+  # Sample windows (CWF agentic: short sessions → use tighter windows)
+  default_begin_sample:    50
+  default_dirty_samples:   100
+  low_copy_begin_sample:   50
+  low_copy_dirty_samples:  50
+  speed_begin_sample:      50
+  speed_dirty_samples:     50
+  low_copy_threshold:      32
+
+  csv_file:         "__mpp_socket_view_summary.csv"
+  supported_views:
+    - "socket-view"
+  optional_views:
+    - "core-view"
+
+# RAPL (primary power collection for CWF — no PTAT needed)
+rapl:
+  enabled:              true
+  poll_interval_s:      5.0
+  domains:
+    - "package"
+    - "dram"
+    - "uncore"
+
+# SSMON (temperature — CWF and DMR)
+ssmon:
+  config_file:          "../misc/ssmonConfigPTPTemp.json"
+  default_duration_hours: 7
+  output_prefix:        "ssmon_log"
+
+# PTAT (temperature — legacy platforms only; not needed for CWF)
+ptat:
+  filter_value:         "0x4"
+  enable_csv:           true
+  enable_log:           true
+  quiet_mode:           true
+  auto_yes:             true
+  include_id:           true
+  temp_column:          5
+  top_samples:          30
+
+# Platform-specific EDP XML hints
+edp:
+  # Relative to edp_dir/Architecture*/
+  platform_subdirs:
+    clearwaterforest:   "ClearwaterForest"
+    diamondrapids:      "DiamondRapids"
+    graniterapids:      "GraniteRapids"
+    sierraforest:       "SierraForest"
+    emeraldrapids:      "EmeraldRapids"
+    sapphirerapids:     "SapphireRapids"
+    icelake:            "IceLake"
+    cascadelake:        "CascadeLake"

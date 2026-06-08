@@ -1,0 +1,52 @@
+name: CI — Lint & Smoke Test
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Python Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check common/ src/ scripts/setup.py --ignore E501
+
+  import-smoke:
+    name: Import Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install minimal deps
+        run: pip install pyyaml
+      - name: Verify common imports
+        run: |
+          python3 -c "
+          import sys; sys.path.insert(0, '.')
+          from common.platform_info import detect_platform, get_platform_info
+          from common.csv_writer import write_csv_row
+          from common.json_results import ResultsJsonWriter
+          print('All common imports OK')
+          "
+      - name: Verify setup.py --list
+        run: python3 scripts/setup.py --list
+
+  shell-syntax:
+    name: Shell Syntax Check (bash -n)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check misc/ scripts
+        run: |
+          for f in misc/*.sh setup/*.sh scripts/setup/*.sh scripts/inference/*.sh; do
+            bash -n "$f" && echo "OK: $f" || echo "FAIL: $f"
+          done

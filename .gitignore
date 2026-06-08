@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Conda
+.conda/
+
+# Results (keep structure, not data)
+results/**/*.csv
+results/**/*.json
+results/**/*.txt
+results/**/emon/
+results/**/telemetry/
+!results/.gitkeep
+!results/README.md
+!results/platform/.gitkeep
+
+# EMON raw files
+*.emon
+emon_*.txt
+__mpp_*
+
+# Models (too large for git)
+models/
+*.gguf
+*.bin
+*.safetensors
+
+# Logs
+*.log
+/tmp/
+
+# OS artifacts
+.DS_Store
+desktop.ini
+Thumbs.db
+
+# VS Code
+.vscode/settings.json
+.vscode/launch.json
