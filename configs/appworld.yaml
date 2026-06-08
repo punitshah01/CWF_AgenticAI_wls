@@ -1,0 +1,63 @@
+# =============================================================================
+# configs/appworld.yaml — AppWorld Run Configuration for CWF
+# =============================================================================
+
+# Dataset
+dataset:
+  name: "test_normal"         # train | dev | test_normal | test_challenge
+  task_ids: []                # empty = all tasks in dataset
+
+# Agent
+agent:
+  name: "simplified_function_calling_agent"
+  # alternatives: react_agent | full_code_agent
+  model_name: "local-llm"
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  temperature: 0.0
+  max_tokens: 2048
+  max_interactions: 20       # max API calls per task
+
+# AppWorld server
+server:
+  host: "localhost"
+  port: 5000                 # AppWorld's internal Python server
+  # Multi-instance: each instance runs on a separate port
+  # Instance N uses port (5000 + N)
+
+# Parallelism
+parallelism:
+  num_instances: 1           # parallel agent instances
+  # AppWorld is lightweight (~2-4 GB per instance)
+  # CWF can run 8+ instances comfortably
+
+# Output
+output:
+  run_name: "cwf_baseline"
+  results_dir: "results/appworld"
+  log_level: "INFO"
+  save_api_traces: true      # save full API call traces for analysis
+
+# CWF topology
+topology:
+  inference_cores: "0-63"
+  env_cores: "64-79"         # AppWorld Python servers (very lightweight)
+  metrics_cores: "80-87"
+
+# Multi-instance scaling study
+scaling_study:
+  num_instances_sweep: [1, 2, 4, 8]
+  datasets_sweep:
+    - "dev"           # quick validation
+    - "test_normal"   # characterization
+  repetitions: 3
+  collect_emon: true
+
+# Evaluation metrics
+metrics:
+  primary: "task_completion_rate"  # % tasks passing evaluation
+  secondary:
+    - "sgc_score"                  # Soft Goal Completion
+    - "api_calls_count"
+    - "avg_interactions"
+    - "tokens_per_task"

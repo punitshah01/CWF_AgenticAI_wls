@@ -1,0 +1,64 @@
+# =============================================================================
+# configs/osworld.yaml — OSWorld Run Configuration for CWF
+# =============================================================================
+
+# Environment provider
+environment:
+  provider_name: "docker"    # docker (Docker+KVM) | vm (bare QEMU)
+  headless: true
+  sleep_after_execution: 3   # seconds to wait after each action
+  max_steps: 15              # default max steps per task
+  client_password: "password"
+
+# Parallelism
+parallelism:
+  num_envs: 10              # parallel VM environments
+  # CWF RAM budget: 10 * ~8 GB = 80 GB for VMs
+  # CWF core budget: 10 * ~8 cores = 80 env cores
+  # Remaining for LLM: total_cores - 80 - 16 (metrics)
+
+# Agent / LLM
+agent:
+  model: "local-llm"
+  observation_type: "screenshot"     # screenshot | accessibility_tree | mixed
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  temperature: 0.0
+  max_tokens: 1024
+
+# Task selection
+tasks:
+  domains:
+    - "libreoffice_calc"
+    - "libreoffice_impress"
+    - "libreoffice_writer"
+    - "chrome"
+    - "vscode"
+    - "gimp"
+    - "vlc"
+    - "os"              # file manager, terminal
+  task_ids: []          # empty = all tasks in selected domains
+
+# Output
+output:
+  result_dir: "results/osworld"
+  save_screenshots: true    # needed for debugging GUI actions
+  detailed: true
+
+# CWF topology
+topology:
+  inference_cores: "0-63"
+  env_cores: "64-143"       # KVM VMs (cgroup cpuset per VM)
+  metrics_cores: "144-159"
+
+# KVM tuning
+kvm:
+  vcpus_per_vm: 4
+  memory_per_vm_gb: 8
+  cpu_pinning: true         # pin vCPUs to physical cores within env_cores range
+
+# Scaling study
+scaling_study:
+  num_envs_sweep: [1, 2, 4, 8, 10]
+  repetitions: 2
+  collect_emon: true

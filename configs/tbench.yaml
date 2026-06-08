@@ -1,0 +1,54 @@
+# =============================================================================
+# configs/tbench.yaml — T-Bench Run Configuration for CWF
+# =============================================================================
+
+# Mock API server
+server:
+  host: "localhost"
+  port: 8001
+  log_requests: true
+
+# Agent / LLM
+agent:
+  model_name: "local-llm"
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  temperature: 0.0
+  max_tokens: 512
+
+# Evaluation dimensions
+evaluation:
+  tool_selection: true      # is the correct tool chosen?
+  param_extraction: true    # are parameters extracted correctly?
+  workflow_completion: true # does multi-step workflow complete?
+  error_recovery: true      # can agent retry on tool failure?
+
+# Workflow configurations
+workflows:
+  max_steps: 10             # max tool calls per task
+  retry_on_error: true
+  retry_limit: 2
+
+# Output
+output:
+  results_dir: "results/tbench"
+  log_level: "INFO"
+  save_traces: true
+
+# CWF topology
+topology:
+  inference_cores: "0-63"
+  env_cores: "64-67"        # mock server is single-threaded, minimal footprint
+  metrics_cores: "68-71"
+
+# Scaling study
+scaling_study:
+  inference_cores_sweep: [16, 32, 64, 128]
+  repetitions: 5            # T-Bench is fast; run more reps for statistical confidence
+  collect_emon: true
+
+# Success criteria
+success_criteria:
+  tool_accuracy_min_pct: 70
+  param_accuracy_min_pct: 60
+  workflow_completion_min_pct: 50

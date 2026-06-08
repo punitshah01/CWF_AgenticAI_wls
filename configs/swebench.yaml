@@ -1,0 +1,52 @@
+# =============================================================================
+# configs/swebench.yaml — SWE-bench Run Configuration for CWF
+# =============================================================================
+
+# Dataset selection
+dataset:
+  name: "princeton-nlp/SWE-bench_Lite"   # Lite (300) | Verified (500) | Full (2294)
+  split: "test"
+  instance_ids: []  # empty = all tasks; or list specific IDs e.g. ["sympy__sympy-20590"]
+
+# Evaluation harness
+harness:
+  max_workers: 8          # CWF BKM: min(0.75 * nproc, 24) — leave headroom for LLM
+  run_id: "cwf_baseline"
+  timeout_per_task: 1800  # seconds (30 min)
+  predictions_path: ""    # path to <agent>.jsonl predictions file
+
+# Agent configuration
+agent:
+  name: "swe_agent"       # swe_agent | openhands | aider
+  model_name: "local-llm"
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  max_iterations: 50
+  cost_limit: null        # disable API cost limit for local inference
+
+# Docker / environment
+environment:
+  docker:
+    timeout_build: 600    # seconds to build per-repo Docker image
+    timeout_run: 600      # seconds to run test suite
+    max_containers: 8     # parallel containers (match max_workers)
+
+# Core pinning for environment containers
+# CWF: reserve cores 0...(inference_cores-1) for LLM; env gets the rest
+topology:
+  inference_cores: "0-63"    # cores for LLM inference server
+  env_cores: "64-127"        # cores for Docker containers (cgroup cpuset)
+  metrics_cores: "128-143"   # orchestration + metrics (unpinned fallback)
+
+# Scaling study points (override max_workers per run)
+scaling_study:
+  max_workers_sweep: [1, 2, 4, 8, 16]
+  repetitions: 3
+  collect_emon: true
+
+# Output
+output:
+  results_dir: "results/swebench"
+  log_level: "INFO"
+  save_trajectories: true
+  save_docker_logs: false

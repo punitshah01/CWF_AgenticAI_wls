@@ -1,0 +1,57 @@
+# =============================================================================
+# configs/webarena.yaml — WebArena Run Configuration for CWF
+# =============================================================================
+
+# Task selection
+tasks:
+  test_start_idx: 0
+  test_end_idx: 812       # full suite; use 0-50 for quick smoke test
+  instruction_path: "agent/prompts/jsons/p_cot_id_actree_2s.json"
+
+# Web service endpoints (must match running Docker containers)
+services:
+  shopping: "localhost:7770"
+  shopping_admin: "localhost:7780/admin"
+  reddit: "localhost:9999"
+  gitlab: "localhost:8023"
+  wikipedia: "localhost:8888/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing"
+  map: "localhost:3000"
+
+# Browser / Playwright
+browser:
+  headless: true
+  slow_mo: 0              # ms delay between actions (0 = fastest)
+  timeout: 30000          # ms per browser action
+  observation_type: "accessibility_tree"  # accessibility_tree | screenshot | mixed
+
+# Agent
+agent:
+  model: "local-llm"
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  max_steps: 30           # max actions per task
+  temperature: 0.0
+  max_tokens: 1024
+
+# Output
+output:
+  result_dir: "results/webarena"
+  save_screenshots: false  # set true for debugging; large storage cost
+  log_level: "INFO"
+
+# CWF topology
+topology:
+  inference_cores: "0-63"
+  env_cores: "64-127"     # Playwright + Docker services
+  metrics_cores: "128-143"
+
+# Resource monitoring
+monitoring:
+  collect_docker_stats: true
+  collect_rapl: true
+  rapl_sample_interval_s: 5
+
+# Scaling study
+scaling_study:
+  parallel_agents_sweep: [1, 2, 4]  # parallel evaluation runs
+  repetitions: 3

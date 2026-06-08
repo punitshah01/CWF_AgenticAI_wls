@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic AI Workloads — CWF Platform Characterization Test Plan</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {
+    --intel-blue: #0054ae;
+    --intel-light-blue: #00aeef;
+    --intel-dark: #1a1a2e;
+    --intel-gray: #f4f5f7;
+    --intel-border: #e0e0e0;
+    --success: #1b8a3e;
+    --warning: #c07a0a;
+    --danger: #d32f2f;
+    --info: #1565c0;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Intel Clear', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background: #fff;
+}
+/* Header */
+.header {
+    background: var(--intel-blue);
+    color: white;
+    padding: 20px 40px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+.header .intel-logo {
+    height: 32px;
+    filter: brightness(0) invert(1);
+}
+.header .title-block { flex: 1; }
+.header h1 { font-size: 1.6rem; font-weight: 600; }
+.header .subtitle { font-size: 0.9rem; opacity: 0.85; margin-top: 2px; }
+.header .poc-badge {
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+/* Navigation */
+.nav-bar {
+    background: #f8f9fa;
+    border-bottom: 1px solid var(--intel-border);
+    padding: 12px 40px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+.nav-bar a {
+    color: var(--intel-blue);
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+    margin-right: 24px;
+    padding: 4px 0;
+    border-bottom: 2px solid transparent;
+    transition: border-color 0.2s;
+}
+.nav-bar a:hover { border-bottom-color: var(--intel-blue); }
+/* Main content */
+.container { max-width: 1400px; margin: 0 auto; padding: 30px 40px; }
+/* Section styles */
+.section { margin-bottom: 48px; }
+.section-title {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--intel-dark);
+    border-bottom: 3px solid var(--intel-blue);
+    padding-bottom: 8px;
+    margin-bottom: 20px;
+}
+.section-subtitle {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #444;
+    margin: 24px 0 12px 0;
+}
+/* KPI Strip */
+.kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 32px;
+}
+.kpi-card {
+    background: linear-gradient(135deg, #f8fbff 0%, #fff 100%);
+    border: 1px solid var(--intel-border);
+    border-left: 4px solid var(--intel-blue);
+    border-radius: 8px;
+    padding: 16px 20px;
+    text-align: center;
+}
+.kpi-card .kpi-value { font-size: 1.8rem; font-weight: 700; color: var(--intel-blue); }
+.kpi-card .kpi-label { font-size: 0.8rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.88rem;
+}
+th, td { padding: 10px 14px; text-align: left; border: 1px solid var(--intel-border); }
+th {
+    background: var(--intel-blue);
+    color: white;
+    font-weight: 500;
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+tr:nth-child(even) { background: #f9fafb; }
+tr:hover { background: #eef5ff; }
+/* Info boxes */
+.info-box {
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 16px 0;
+    font-size: 0.9rem;
+}
+.info-box.architecture { background: #e3f2fd; border-left: 4px solid var(--info); }
+.info-box.warning { background: #fff3e0; border-left: 4px solid var(--warning); }
+.info-box.success { background: #e8f5e9; border-left: 4px solid var(--success); }
+.info-box.critical { background: #ffebee; border-left: 4px solid var(--danger); }
+.info-box strong { display: block; margin-bottom: 4px; }
+/* Tags */
+.tag {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-right: 4px;
+}
+.tag-high { background: #ffcdd2; color: #b71c1c; }
+.tag-medium { background: #fff9c4; color: #f57f17; }
+.tag-low { background: #c8e6c9; color: #1b5e20; }
+.tag-docker { background: #e3f2fd; color: #0d47a1; }
+.tag-kvm { background: #f3e5f5; color: #4a148c; }
+.tag-python { background: #e8f5e9; color: #1b5e20; }
+/* Code blocks */
+.code-block {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    overflow-x: auto;
+    margin: 12px 0;
+    line-height: 1.7;
+}
+.code-block .comment { color: #6c7086; }
+.code-block .cmd { color: #89b4fa; }
+.code-block .flag { color: #a6e3a1; }
+.code-block .value { color: #fab387; }
+/* Benchmark cards */
+.benchmark-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 24px;
+    margin: 20px 0;
+}
+.benchmark-card {
+    background: #fff;
+    border: 1px solid var(--intel-border);
+    border-radius: 12px;
+    padding: 24px;
+    transition: box-shadow 0.2s;
+}
+.benchmark-card:hover { box-shadow: 0 4px 20px rgba(0,84,174,0.1); }
+.benchmark-card h3 {
+    font-size: 1.1rem;
+    color: var(--intel-blue);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.benchmark-card .bench-meta { font-size: 0.82rem; color: #666; margin-bottom: 12px; }
+.benchmark-card ul { padding-left: 18px; font-size: 0.88rem; }
+.benchmark-card ul li { margin-bottom: 4px; }
+/* Phase timeline */
+.timeline {
+    position: relative;
+    padding-left: 30px;
+    margin: 20px 0;
+}
+.timeline::before {
+    content: '';
+    position: absolute;
+    left: 12px;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--intel-blue);
+    border-radius: 2px;
+}
+.timeline-item {
+    position: relative;
+    margin-bottom: 24px;
+    padding: 16px 20px;
+    background: #f8fbff;
+    border-radius: 8px;
+    border: 1px solid #e3ecf7;
+}
+.timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -24px;
+    top: 20px;
+    width: 12px;
+    height: 12px;
+    background: var(--intel-blue);
+    border-radius: 50%;
+    border: 3px solid white;
+    box-shadow: 0 0 0 2px var(--intel-blue);
+}
+.timeline-item h4 { color: var(--intel-blue); font-size: 1rem; margin-bottom: 6px; }
+.timeline-item p { font-size: 0.88rem; color: #555; }
+/* Charts */
+.chart-container {
+    background: white;
+    border: 1px solid var(--intel-border);
+    border-radius: 8px;
+    padding: 20px;
+    margin: 16px 0;
+}
+.chart-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+@media (max-width: 900px) { .chart-row { grid-template-columns: 1fr; } }
+/* Footer */
+.footer {
+    background: var(--intel-dark);
+    color: #aaa;
+    padding: 20px 40px;
+    font-size: 0.8rem;
+    text-align: center;
+    margin-top: 60px;
+}
+/* Print */
+@media print {
+    .nav-bar { display: none; }
+    .container { padding: 20px; }
+    .benchmark-card { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+    <div class="title-block">
+        <h1>Agentic AI Workloads — CWF Platform Characterization Test Plan</h1>
+        <div class="subtitle">Clearwater Forest (E-core) | SWE-bench · WebArena · OSWorld · AppWorld · T-Bench | Local LLM Inference + Scaling Study</div>
+    </div>
+    <div class="poc-badge">POC: Amruta Misra</div>
+</div>
+
+<!-- Navigation -->
+<div class="nav-bar">
+    <a href="#overview">Overview</a>
+    <a href="#platform">Platform</a>
+    <a href="#benchmarks">Benchmarks</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#scaling">Scaling Study</a>
+    <a href="#setup">Setup & Commands</a>
+    <a href="#kpis">KPIs & Metrics</a>
+    <a href="#phases">Execution Phases</a>
+    <a href="#risks">Risks</a>
+</div>
+
+<div class="container">
+
+<!-- KPI Strip -->
+<div class="kpi-strip">
+    <div class="kpi-card">
+        <div class="kpi-value">5</div>
+        <div class="kpi-label">Benchmark Suites</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value">CWF</div>
+        <div class="kpi-label">Target Platform</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value">E-core</div>
+        <div class="kpi-label">Core Type (Darkmont)</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value">Local</div>
+        <div class="kpi-label">LLM Inference Mode</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value">1→16</div>
+        <div class="kpi-label">Instance Scaling Range</div>
+    </div>
+</div>
+
+<!-- Section 1: Overview -->
+<div class="section" id="overview">
+    <h2 class="section-title">1. Executive Overview</h2>
+    <p>This test plan characterizes Clearwater Forest (CWF) platform performance under <strong>Agentic AI workloads</strong> — a new class of compute tasks where LLM-powered autonomous agents solve complex multi-step problems by interacting with environments (code repos, web browsers, desktops, APIs).</p>
+
+    <div class="info-box architecture">
+        <strong>Why CWF for Agentic Workloads?</strong>
+        CWF's high core-count E-core architecture is uniquely suited for agentic AI because: (1) LLM inference is memory-bandwidth bound — more cores spread BW pressure, (2) environment execution (Docker, VMs, browsers) benefits from massive parallelism, (3) multi-instance agent deployment scales naturally with core count, (4) efficiency (perf/watt) matters for always-on agent services.
+    </div>
+
+    <h3 class="section-subtitle">Workload Summary</h3>
+    <table>
+        <tr>
+            <th>Benchmark</th>
+            <th>What It Tests</th>
+            <th>Environment Type</th>
+            <th>Typical Agent Actions</th>
+            <th>Complexity</th>
+        </tr>
+        <tr>
+            <td><strong>SWE-bench</strong></td>
+            <td>Real-world software engineering (GitHub issues)</td>
+            <td>Docker containers</td>
+            <td>Read code, understand bugs, modify code, run tests, submit patches</td>
+            <td><span class="tag tag-medium">Medium</span></td>
+        </tr>
+        <tr>
+            <td><strong>WebArena</strong></td>
+            <td>Autonomous web browsing & task completion</td>
+            <td>5 web services + Playwright browser</td>
+            <td>Search, click buttons, fill forms, navigate pages, complete tasks</td>
+            <td><span class="tag tag-high">High</span></td>
+        </tr>
+        <tr>
+            <td><strong>OSWorld</strong></td>
+            <td>Desktop/OS interaction (Linux/Windows)</td>
+            <td>QEMU/KVM virtual machines</td>
+            <td>Use applications, manage files, run programs, configure settings</td>
+            <td><span class="tag tag-high">Very High</span></td>
+        </tr>
+        <tr>
+            <td><strong>AppWorld</strong></td>
+            <td>Multi-application workflows via API calls</td>
+            <td>Python microservices (9 apps, 457 APIs)</td>
+            <td>Coordinate across email, calendar, Spotify, Amazon, messaging</td>
+            <td><span class="tag tag-medium">Medium</span></td>
+        </tr>
+        <tr>
+            <td><strong>T-Bench</strong></td>
+            <td>Tool calling and task execution reliability</td>
+            <td>Tool API mock server</td>
+            <td>Select appropriate tools, invoke APIs, manage multi-step workflows</td>
+            <td><span class="tag tag-low">Low</span></td>
+        </tr>
+    </table>
+</div>
+
+<!-- Section 2: Platform -->
+<div class="section" id="platform">
+    <h2 class="section-title">2. Platform Model — Clearwater Forest (CWF)</h2>
+
+    <table>
+        <tr><th>Attribute</th><th>Value</th><th>Notes</th></tr>
+        <tr><td>Codename</td><td><strong>Clearwater Forest (CWF)</strong></td><td>Next-gen E-core server</td></tr>
+        <tr><td>CPU Family / Model</td><td>6 / 221</td><td>Stepping 0–2</td></tr>
+        <tr><td>Core Type</td><td>E-core (Darkmont)</td><td>No HyperThreading</td></tr>
+        <tr><td>Core Count</td><td>144–288 per socket (SKU dependent)</td><td>4 cores per module</td></tr>
+        <tr><td>Threads per Core</td><td>1</td><td>No SMT</td></tr>
+        <tr><td>L2 Cache</td><td>4 MB per module (shared by 4 cores)</td><td>Module boundary matters</td></tr>
+        <tr><td>L3 Cache</td><td>Large shared LLC</td><td>Per-die cluster</td></tr>
+        <tr><td>Memory Channels</td><td>12-channel DDR5</td><td>High bandwidth</td></tr>
+        <tr><td>Vector Extensions</td><td>AVX-VNNI (256-bit)</td><td>INT8 matmul acceleration</td></tr>
+        <tr><td>Platform</td><td>Birch Stream (BHS)</td><td>Same platform as GNR</td></tr>
+        <tr><td>Key Strength</td><td>Throughput & Efficiency</td><td>High core density, low power/core</td></tr>
+        <tr><td>KVM Support</td><td>Yes (VT-x)</td><td>Required for OSWorld</td></tr>
+    </table>
+
+    <div class="info-box success">
+        <strong>CWF Advantages for Agentic Workloads</strong>
+        <ul style="padding-left: 18px; margin-top: 8px;">
+            <li><strong>Core density:</strong> Run 16+ concurrent agent instances with full isolation</li>
+            <li><strong>Memory bandwidth:</strong> 12-ch DDR5 feeds LLM inference token generation</li>
+            <li><strong>AVX-VNNI:</strong> INT8 quantized model inference gets hardware acceleration</li>
+            <li><strong>Power efficiency:</strong> E-cores deliver better perf/watt for always-on services</li>
+            <li><strong>KVM:</strong> Native virtualization for OSWorld VM-based benchmarks</li>
+        </ul>
+    </div>
+</div>
+
+<!-- Section 3: Benchmarks Deep Dive -->
+<div class="section" id="benchmarks">
+    <h2 class="section-title">3. Benchmark Deep Dive</h2>
+
+    <div class="benchmark-grid">
+        <!-- SWE-bench -->
+        <div class="benchmark-card">
+            <h3>🔧 SWE-bench</h3>
+            <div class="bench-meta">Princeton NLP | ICLR 2024 Oral | 2,294 tasks | MIT License</div>
+            <table>
+                <tr><td><strong>Paper</strong></td><td>arxiv.org/abs/2310.06770</td></tr>
+                <tr><td><strong>Repo</strong></td><td>github.com/SWE-bench/SWE-bench</td></tr>
+                <tr><td><strong>Dataset</strong></td><td>SWE-bench Verified (500 tasks), Lite (300 tasks)</td></tr>
+                <tr><td><strong>Agent Framework</strong></td><td>SWE-agent, OpenHands, Aider</td></tr>
+                <tr><td><strong>Environment</strong></td><td>Docker containers (per-task repo + tests)</td></tr>
+                <tr><td><strong>Compute Profile</strong></td><td>I/O heavy (git ops), bursty CPU (test runs)</td></tr>
+                <tr><td><strong>Memory</strong></td><td>~4–8 GB per instance (repo + deps)</td></tr>
+                <tr><td><strong>Min Requirements</strong></td><td>x86_64, 120 GB storage, 16 GB RAM, Docker</td></tr>
+            </table>
+            <h4 style="margin-top:12px; font-size:0.9rem;">Evaluation Flow:</h4>
+            <ul>
+                <li>Agent receives: codebase + GitHub issue description</li>
+                <li>Agent generates: a patch (unified diff)</li>
+                <li>Harness runs: repository test suite inside Docker</li>
+                <li>Pass/Fail: tests that were failing now pass</li>
+            </ul>
+        </div>
+
+        <!-- WebArena -->
+        <div class="benchmark-card">
+            <h3>🌐 WebArena</h3>
+            <div class="bench-meta">CMU | NeurIPS 2023 | 812 tasks | Apache 2.0</div>
+            <table>
+                <tr><td><strong>Paper</strong></td><td>arxiv.org/abs/2307.13854</td></tr>
+                <tr><td><strong>Repo</strong></td><td>github.com/web-arena-x/webarena</td></tr>
+                <tr><td><strong>Services</strong></td><td>Shopping, GitLab, Reddit, Wikipedia, Map</td></tr>
+                <tr><td><strong>Browser</strong></td><td>Playwright (headless Chromium)</td></tr>
+                <tr><td><strong>Observation</strong></td><td>Accessibility tree or screenshots</td></tr>
+                <tr><td><strong>Compute Profile</strong></td><td>Network I/O, DOM parsing, multi-service</td></tr>
+                <tr><td><strong>Memory</strong></td><td>~12–20 GB (5 web service containers)</td></tr>
+                <tr><td><strong>Min Requirements</strong></td><td>Docker, 50 GB storage, 32 GB RAM</td></tr>
+            </table>
+            <h4 style="margin-top:12px; font-size:0.9rem;">5 Self-Hosted Services:</h4>
+            <ul>
+                <li><strong>Shopping</strong> (Magento) — port 7770</li>
+                <li><strong>CMS Admin</strong> — port 7780</li>
+                <li><strong>Reddit</strong> (Postmill) — port 9999</li>
+                <li><strong>GitLab</strong> — port 8023</li>
+                <li><strong>Wikipedia</strong> (Kiwix) — port 8888</li>
+                <li><strong>Map</strong> (OSRM) — port 3000</li>
+            </ul>
+        </div>
+
+        <!-- OSWorld -->
+        <div class="benchmark-card">
+            <h3>🖥️ OSWorld</h3>
+            <div class="bench-meta">xlang-ai | NeurIPS 2024 | 369 tasks | Apache 2.0</div>
+            <table>
+                <tr><td><strong>Paper</strong></td><td>arxiv.org/abs/2404.07972</td></tr>
+                <tr><td><strong>Repo</strong></td><td>github.com/xlang-ai/OSWorld</td></tr>
+                <tr><td><strong>VM Types</strong></td><td>Ubuntu Linux, Windows (via Docker+KVM)</td></tr>
+                <tr><td><strong>Agent Input</strong></td><td>Screenshots + accessibility tree</td></tr>
+                <tr><td><strong>Domains</strong></td><td>LibreOffice, Chrome, Terminal, VSCode, GIMP, VLC</td></tr>
+                <tr><td><strong>Compute Profile</strong></td><td>KVM virtualization, GUI rendering, vision</td></tr>
+                <tr><td><strong>Memory</strong></td><td>~8 GB per VM instance</td></tr>
+                <tr><td><strong>Min Requirements</strong></td><td>KVM support, Docker, 64 GB RAM, 100 GB storage</td></tr>
+            </table>
+            <h4 style="margin-top:12px; font-size:0.9rem;">Key Features:</h4>
+            <ul>
+                <li>Real full-desktop VM environments</li>
+                <li>Requires multimodal model (screenshot understanding)</li>
+                <li>Parallel evaluation supported via Docker+KVM</li>
+                <li>15 max steps per task by default</li>
+                <li>Supports 10+ parallel environments</li>
+            </ul>
+        </div>
+
+        <!-- AppWorld -->
+        <div class="benchmark-card">
+            <h3>📱 AppWorld</h3>
+            <div class="bench-meta">Stony Brook NLP | ACL 2024 Best Resource | 750 tasks | Apache 2.0</div>
+            <table>
+                <tr><td><strong>Paper</strong></td><td>arxiv.org/abs/2407.18901</td></tr>
+                <tr><td><strong>Repo</strong></td><td>github.com/StonyBrookNLP/appworld</td></tr>
+                <tr><td><strong>Apps</strong></td><td>9 apps (Amazon, Spotify, Gmail, Calendar, etc.)</td></tr>
+                <tr><td><strong>APIs</strong></td><td>457 total API endpoints</td></tr>
+                <tr><td><strong>Agent Types</strong></td><td>Function-calling, ReAct code, Full code</td></tr>
+                <tr><td><strong>Compute Profile</strong></td><td>Lightweight — pure Python, in-memory DBs</td></tr>
+                <tr><td><strong>Memory</strong></td><td>~2–4 GB per instance</td></tr>
+                <tr><td><strong>Min Requirements</strong></td><td>Python 3.11+, 8 GB RAM, 10 GB storage</td></tr>
+            </table>
+            <h4 style="margin-top:12px; font-size:0.9rem;">Datasets:</h4>
+            <ul>
+                <li><strong>train</strong> — for development/tuning</li>
+                <li><strong>dev</strong> — for hyperparameter tuning</li>
+                <li><strong>test_normal</strong> — standard difficulty</li>
+                <li><strong>test_challenge</strong> — hard tasks</li>
+                <li>MCP Server support (new) — standardized tool interface</li>
+            </ul>
+        </div>
+
+        <!-- T-Bench -->
+        <div class="benchmark-card">
+            <h3>🛠️ T-Bench</h3>
+            <div class="bench-meta">Tool-Calling Benchmark | Lightweight | Variable task count</div>
+            <table>
+                <tr><td><strong>Focus</strong></td><td>Tool selection accuracy & execution reliability</td></tr>
+                <tr><td><strong>Environment</strong></td><td>Mock API server (REST endpoints)</td></tr>
+                <tr><td><strong>Agent Types</strong></td><td>Function-calling agents</td></tr>
+                <tr><td><strong>Compute Profile</strong></td><td>Very lightweight — API call + JSON parsing</td></tr>
+                <tr><td><strong>Memory</strong></td><td>~1–2 GB</td></tr>
+                <tr><td><strong>Min Requirements</strong></td><td>Python 3.10+, minimal storage</td></tr>
+            </table>
+            <h4 style="margin-top:12px; font-size:0.9rem;">Evaluation Dimensions:</h4>
+            <ul>
+                <li>Tool selection accuracy (correct tool chosen)</li>
+                <li>Parameter extraction correctness</li>
+                <li>Multi-step plan execution</li>
+                <li>Error recovery and retry logic</li>
+                <li>Workflow completion rate</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Section 4: Architecture -->
+<div class="section" id="architecture">
+    <h2 class="section-title">4. Deployment Architecture on CWF</h2>
+
+    <div class="info-box architecture">
+        <strong>Two-Domain Compute Model</strong>
+        Agentic workloads have two distinct compute domains that must be characterized independently:
+        <br><br>
+        <strong>Domain 1 — LLM Inference (The "Brain"):</strong> Memory-BW bound, vectorized matmul, large working set, benefits from AVX-VNNI<br>
+        <strong>Domain 2 — Environment Execution (The "Body"):</strong> I/O heavy, process spawning, Docker/KVM orchestration, bursty, benefits from core count
+    </div>
+
+    <h3 class="section-subtitle">Inference Engine Options for CWF</h3>
+    <table>
+        <tr>
+            <th>Engine</th>
+            <th>Backend</th>
+            <th>Intel Optimization</th>
+            <th>Best For</th>
+            <th>Quantization</th>
+        </tr>
+        <tr>
+            <td><strong>vLLM</strong></td>
+            <td>OpenVINO / PyTorch</td>
+            <td>OpenVINO backend auto-detects Intel features</td>
+            <td>Multi-instance serving, batched requests</td>
+            <td>INT8, INT4 (GPTQ/AWQ)</td>
+        </tr>
+        <tr>
+            <td><strong>llama.cpp</strong></td>
+            <td>GGML/GGUF</td>
+            <td>Explicit AVX-VNNI codepaths</td>
+            <td>Single-instance, low memory, fast startup</td>
+            <td>Q4_0, Q4_K_M, Q8_0</td>
+        </tr>
+        <tr>
+            <td><strong>OpenVINO GenAI</strong></td>
+            <td>OpenVINO IR</td>
+            <td>Native Intel graph optimization</td>
+            <td>Production deployment, max throughput</td>
+            <td>INT8, INT4 (NNCF)</td>
+        </tr>
+        <tr>
+            <td><strong>IPEX-LLM</strong></td>
+            <td>Intel Extension for PyTorch</td>
+            <td>Custom kernels for Xeon</td>
+            <td>Research, flexibility</td>
+            <td>INT8, INT4, FP16</td>
+        </tr>
+    </table>
+
+    <h3 class="section-subtitle">Recommended Model Sizes</h3>
+    <table>
+        <tr>
+            <th>Model</th>
+            <th>Parameters</th>
+            <th>Memory (INT4)</th>
+            <th>Memory (INT8)</th>
+            <th>Purpose</th>
+        </tr>
+        <tr>
+            <td>Llama-3.1-8B-Instruct</td>
+            <td>8B</td>
+            <td>~5 GB</td>
+            <td>~9 GB</td>
+            <td>Baseline — fast iteration</td>
+        </tr>
+        <tr>
+            <td>Qwen2.5-32B-Instruct</td>
+            <td>32B</td>
+            <td>~18 GB</td>
+            <td>~34 GB</td>
+            <td>Capability sweet-spot</td>
+        </tr>
+        <tr>
+            <td>Llama-3.1-70B-Instruct</td>
+            <td>70B</td>
+            <td>~38 GB</td>
+            <td>~72 GB</td>
+            <td>Stress test — BW saturation</td>
+        </tr>
+        <tr>
+            <td>Qwen2.5-Coder-32B</td>
+            <td>32B</td>
+            <td>~18 GB</td>
+            <td>~34 GB</td>
+            <td>SWE-bench optimized</td>
+        </tr>
+    </table>
+
+    <h3 class="section-subtitle">System Architecture Diagram</h3>
+    <div style="background:#f8fbff; border:2px solid var(--intel-blue); border-radius:12px; padding:24px; margin:12px 0;">
+        <!-- Server outer box -->
+        <div style="text-align:center; font-weight:700; font-size:1rem; color:var(--intel-blue); margin-bottom:16px; padding:8px; background:var(--intel-blue); color:white; border-radius:8px;">
+            CWF Server (Clearwater Forest) — E-core Darkmont, 144–288 cores, 12-ch DDR5
+        </div>
+
+        <!-- Main two-column layout -->
+        <div style="display:grid; grid-template-columns:1fr auto 1fr; gap:12px; align-items:stretch;">
+
+            <!-- Left: Inference Engine -->
+            <div style="background:white; border:2px solid #0054ae; border-radius:10px; padding:20px;">
+                <div style="text-align:center; font-weight:700; color:var(--intel-blue); font-size:0.95rem; margin-bottom:12px; padding:6px; background:#e3f2fd; border-radius:6px;">
+                    🧠 LLM Inference Engine
+                </div>
+                <div style="font-size:0.85rem; line-height:1.8;">
+                    <div style="display:flex; justify-content:space-between; padding:4px 8px; background:#f4f5f7; border-radius:4px; margin:4px 0;">
+                        <span><strong>Engine:</strong></span><span>vLLM / llama.cpp</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; padding:4px 8px; margin:4px 0;">
+                        <span><strong>Model:</strong></span><span>Llama-3.1-8B → 70B</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; padding:4px 8px; background:#f4f5f7; border-radius:4px; margin:4px 0;">
+                        <span><strong>Quant:</strong></span><span>INT8 / INT4</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; padding:4px 8px; margin:4px 0;">
+                        <span><strong>Cores:</strong></span><span>50–70% (module-aligned)</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; padding:4px 8px; background:#f4f5f7; border-radius:4px; margin:4px 0;">
+                        <span><strong>Pinning:</strong></span><span>numactl / taskset</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; padding:4px 8px; margin:4px 0;">
+                        <span><strong>Output:</strong></span><span>OpenAI-compat API :8000</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center: Arrows -->
+            <div style="display:flex; flex-direction:column; justify-content:center; align-items:center; gap:4px;">
+                <div style="font-size:1.4rem; color:var(--intel-blue);">⟵</div>
+                <div style="writing-mode:vertical-lr; font-size:0.7rem; color:#666; font-weight:600; letter-spacing:1px;">PROMPTS & TOKENS</div>
+                <div style="font-size:1.4rem; color:var(--intel-blue);">⟶</div>
+            </div>
+
+            <!-- Right: Task Environments -->
+            <div style="background:white; border:2px solid #7c5cfc; border-radius:10px; padding:20px;">
+                <div style="text-align:center; font-weight:700; color:#7c5cfc; font-size:0.95rem; margin-bottom:12px; padding:6px; background:#f3e5f5; border-radius:6px;">
+                    ⚙️ Task Environments
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                    <div style="background:#e3f2fd; border:1px solid #90caf9; border-radius:6px; padding:10px; text-align:center;">
+                        <div style="font-weight:700; font-size:0.82rem; color:#0d47a1;">SWE-bench</div>
+                        <div style="font-size:0.72rem; color:#666; margin-top:2px;">Docker containers<br>Git repos + pytest</div>
+                    </div>
+                    <div style="background:#e3f2fd; border:1px solid #90caf9; border-radius:6px; padding:10px; text-align:center;">
+                        <div style="font-weight:700; font-size:0.82rem; color:#0d47a1;">WebArena</div>
+                        <div style="font-size:0.72rem; color:#666; margin-top:2px;">5 web services<br>Playwright browser</div>
+                    </div>
+                    <div style="background:#f3e5f5; border:1px solid #ce93d8; border-radius:6px; padding:10px; text-align:center;">
+                        <div style="font-weight:700; font-size:0.82rem; color:#4a148c;">OSWorld</div>
+                        <div style="font-size:0.72rem; color:#666; margin-top:2px;">KVM/QEMU VMs<br>Desktop GUI</div>
+                    </div>
+                    <div style="background:#e8f5e9; border:1px solid #a5d6a7; border-radius:6px; padding:10px; text-align:center;">
+                        <div style="font-weight:700; font-size:0.82rem; color:#1b5e20;">AppWorld</div>
+                        <div style="font-size:0.72rem; color:#666; margin-top:2px;">9 apps, 457 APIs<br>Python in-memory</div>
+                    </div>
+                    <div style="background:#fff3e0; border:1px solid #ffcc80; border-radius:6px; padding:10px; text-align:center; grid-column: span 2;">
+                        <div style="font-weight:700; font-size:0.82rem; color:#e65100;">T-Bench</div>
+                        <div style="font-size:0.72rem; color:#666; margin-top:2px;">Tool-calling mock API server — lightweight</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Arrow down to metrics -->
+        <div style="text-align:center; margin:12px 0; font-size:1.2rem; color:var(--intel-blue);">▼ ▼ ▼</div>
+
+        <!-- Metrics Layer -->
+        <div style="background:white; border:2px solid #1b8a3e; border-radius:10px; padding:16px;">
+            <div style="text-align:center; font-weight:700; color:#1b8a3e; font-size:0.95rem; margin-bottom:10px;">
+                📊 Metrics Collection Layer
+            </div>
+            <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px;">
+                <div style="background:#e8f5e9; border-radius:20px; padding:6px 14px; font-size:0.8rem; font-weight:500; color:#1b5e20;">tokens/sec</div>
+                <div style="background:#e8f5e9; border-radius:20px; padding:6px 14px; font-size:0.8rem; font-weight:500; color:#1b5e20;">task_latency</div>
+                <div style="background:#e8f5e9; border-radius:20px; padding:6px 14px; font-size:0.8rem; font-weight:500; color:#1b5e20;">success_rate</div>
+                <div style="background:#e8f5e9; border-radius:20px; padding:6px 14px; font-size:0.8rem; font-weight:500; color:#1b5e20;">EMON (TMA/IPC/BW)</div>
+                <div style="background:#e8f5e9; border-radius:20px; padding:6px 14px; font-size:0.8rem; font-weight:500; color:#1b5e20;">RAPL power (W)</div>
+                <div style="background:#e8f5e9; border-radius:20px; padding:6px 14px; font-size:0.8rem; font-weight:500; color:#1b5e20;">tasks/watt-hr</div>
+            </div>
+        </div>
+
+        <!-- Flow description -->
+        <div style="margin-top:16px; padding:12px 16px; background:#fff8e1; border:1px solid #ffe082; border-radius:8px; font-size:0.82rem; color:#5d4037;">
+            <strong>Flow:</strong> Agent Orchestrator sends task instruction to LLM → LLM generates action/code → Action executed in Task Environment → Environment returns observation → LLM generates next action → Loop until task complete or max steps reached → Metrics recorded to CSV
+        </div>
+    </div>
+
+    <h3 class="section-subtitle">Core Partitioning Strategy</h3>
+    <table>
+        <tr>
+            <th>Domain</th>
+            <th>Core Allocation</th>
+            <th>Pinning</th>
+            <th>Rationale</th>
+        </tr>
+        <tr>
+            <td>LLM Inference</td>
+            <td>50–70% of total cores</td>
+            <td>numactl --cpunodebind / taskset</td>
+            <td>BW-bound; needs many cores for parallel token decode</td>
+        </tr>
+        <tr>
+            <td>Environment (Docker/KVM)</td>
+            <td>20–40% of total cores</td>
+            <td>cgroup cpuset per container</td>
+            <td>I/O-bound; scales with instances but not compute-dense</td>
+        </tr>
+        <tr>
+            <td>Orchestration + Metrics</td>
+            <td>5–10% (8–16 cores)</td>
+            <td>Unpinned (OS scheduler)</td>
+            <td>Python control loop, metrics collection</td>
+        </tr>
+    </table>
+</div>
+
+<!-- Section 5: Scaling Study -->
+<div class="section" id="scaling">
+    <h2 class="section-title">5. Scaling Study Design</h2>
+
+    <div class="chart-row">
+        <div class="chart-container">
+            <canvas id="scalingChart"></canvas>
+        </div>
+        <div class="chart-container">
+            <canvas id="resourceChart"></canvas>
+        </div>
+    </div>
+
+    <h3 class="section-subtitle">Phase 1: Single-Instance Core Scaling (Inference-Bound)</h3>
+    <table>
+        <tr>
+            <th>Test Point</th>
+            <th>Inference Cores</th>
+            <th>Env Cores</th>
+            <th>Goal</th>
+        </tr>
+        <tr><td>1</td><td>16</td><td>8</td><td>Minimum viable — establish baseline</td></tr>
+        <tr><td>2</td><td>32</td><td>16</td><td>1 module-group boundary</td></tr>
+        <tr><td>3</td><td>64</td><td>16</td><td>Cross-module scaling</td></tr>
+        <tr><td>4</td><td>96</td><td>32</td><td>Large partition — approaching BW limits</td></tr>
+        <tr><td>5</td><td>128</td><td>32</td><td>Near-socket saturation</td></tr>
+        <tr><td>6</td><td>192+</td><td>48</td><td>Full platform (if available)</td></tr>
+    </table>
+    <p style="margin-top:8px; font-size:0.88rem; color:#666;">KPIs measured: tokens/sec (prefill), tokens/sec (decode), time-to-first-token, task completion time</p>
+
+    <h3 class="section-subtitle">Phase 2: Multi-Instance Throughput Scaling</h3>
+    <table>
+        <tr>
+            <th>Instances</th>
+            <th>Cores/Instance (Inference)</th>
+            <th>Cores/Instance (Env)</th>
+            <th>Total Cores Used</th>
+            <th>Measurement</th>
+        </tr>
+        <tr><td>1</td><td>64</td><td>16</td><td>80</td><td>Baseline throughput</td></tr>
+        <tr><td>2</td><td>64</td><td>16</td><td>160</td><td>Linear vs sublinear check</td></tr>
+        <tr><td>4</td><td>32</td><td>8</td><td>160</td><td>Same cores, more instances</td></tr>
+        <tr><td>8</td><td>16</td><td>8</td><td>192</td><td>High parallelism</td></tr>
+        <tr><td>16</td><td>12</td><td>6</td><td>288</td><td>Maximum instances (if ≥288 cores)</td></tr>
+    </table>
+    <p style="margin-top:8px; font-size:0.88rem; color:#666;">KPIs: aggregate tasks/hour, per-instance degradation %, power (pkg watts), efficiency (tasks/watt)</p>
+
+    <h3 class="section-subtitle">Phase 3: Topology-Aware Placement</h3>
+    <table>
+        <tr>
+            <th>Experiment</th>
+            <th>Description</th>
+            <th>Hypothesis</th>
+        </tr>
+        <tr>
+            <td>Compact Placement</td>
+            <td>All agent cores in minimum # of modules</td>
+            <td>Better L2 sharing for inference; higher LLC hit rate</td>
+        </tr>
+        <tr>
+            <td>Spread Placement</td>
+            <td>Distribute across all NUMA nodes / dies</td>
+            <td>Higher aggregate BW; less thermal density</td>
+        </tr>
+        <tr>
+            <td>Co-located</td>
+            <td>Inference + environment on same NUMA node</td>
+            <td>Lower latency for agent ↔ env communication</td>
+        </tr>
+        <tr>
+            <td>Separated</td>
+            <td>Inference and environment on different NUMA nodes</td>
+            <td>Less cache pollution from env I/O</td>
+        </tr>
+    </table>
+</div>
+
+<!-- Section 6: Setup & Commands -->
+<div class="section" id="setup">
+    <h2 class="section-title">6. Setup & Commands</h2>
+
+    <h3 class="section-subtitle">6.1 Base System Setup</h3>
+    <div class="code-block">
+<span class="comment"># System prerequisites</span>
+<span class="cmd">sudo dnf install -y</span> <span class="value">docker-ce docker-ce-cli containerd.io qemu-kvm libvirt python3.11 git-lfs</span>
+<span class="cmd">sudo systemctl enable --now</span> <span class="value">docker libvirtd</span>
+
+<span class="comment"># Verify KVM support (required for OSWorld)</span>
+<span class="cmd">egrep -c</span> <span class="value">'(vmx|svm)' /proc/cpuinfo</span>   <span class="comment"># Must be > 0</span>
+
+<span class="comment"># Python environment</span>
+<span class="cmd">conda create -n</span> <span class="value">agentic python=3.11</span>
+<span class="cmd">conda activate</span> <span class="value">agentic</span>
+
+<span class="comment"># LLM Inference Engine (pick one)</span>
+<span class="cmd">pip install</span> <span class="value">vllm</span>                          <span class="comment"># vLLM with OpenVINO backend</span>
+<span class="comment"># OR</span>
+<span class="cmd">apt install</span> <span class="value">llama-cpp</span>                      <span class="comment"># llama.cpp for GGUF models</span>
+    </div>
+
+    <h3 class="section-subtitle">6.2 SWE-bench Setup</h3>
+    <div class="code-block">
+<span class="comment"># Install SWE-bench</span>
+<span class="cmd">git clone</span> <span class="value">git@github.com:princeton-nlp/SWE-bench.git</span>
+<span class="cmd">cd</span> <span class="value">SWE-bench</span>
+<span class="cmd">pip install -e</span> <span class="value">.</span>
+
+<span class="comment"># Validate installation (single task)</span>
+<span class="cmd">python -m swebench.harness.run_evaluation</span> \
+    <span class="flag">--predictions_path</span> <span class="value">gold</span> \
+    <span class="flag">--max_workers</span> <span class="value">1</span> \
+    <span class="flag">--instance_ids</span> <span class="value">sympy__sympy-20590</span> \
+    <span class="flag">--run_id</span> <span class="value">validate-gold</span>
+
+<span class="comment"># Run evaluation (production)</span>
+<span class="cmd">python -m swebench.harness.run_evaluation</span> \
+    <span class="flag">--dataset_name</span> <span class="value">princeton-nlp/SWE-bench_Lite</span> \
+    <span class="flag">--predictions_path</span> <span class="value">&lt;path_to_predictions&gt;</span> \
+    <span class="flag">--max_workers</span> <span class="value">8</span> \
+    <span class="flag">--run_id</span> <span class="value">cwf_baseline</span>
+
+<span class="comment"># Note: Recommend max_workers ≤ min(0.75 * nproc, 24)</span>
+<span class="comment"># Storage: Need ~120 GB free for Docker images</span>
+    </div>
+
+    <h3 class="section-subtitle">6.3 WebArena Setup</h3>
+    <div class="code-block">
+<span class="comment"># Install WebArena</span>
+<span class="cmd">git clone</span> <span class="value">https://github.com/web-arena-x/webarena.git</span>
+<span class="cmd">cd</span> <span class="value">webarena</span>
+<span class="cmd">conda create -n</span> <span class="value">webarena python=3.10</span>
+<span class="cmd">pip install -r</span> <span class="value">requirements.txt</span>
+<span class="cmd">playwright install</span>
+<span class="cmd">pip install -e</span> <span class="value">.</span>
+
+<span class="comment"># Deploy all 5 web services (Docker)</span>
+<span class="comment"># Follow: environment_docker/README.md</span>
+<span class="cmd">export</span> <span class="value">SHOPPING="localhost:7770"</span>
+<span class="cmd">export</span> <span class="value">SHOPPING_ADMIN="localhost:7780/admin"</span>
+<span class="cmd">export</span> <span class="value">REDDIT="localhost:9999"</span>
+<span class="cmd">export</span> <span class="value">GITLAB="localhost:8023"</span>
+<span class="cmd">export</span> <span class="value">MAP="localhost:3000"</span>
+<span class="cmd">export</span> <span class="value">WIKIPEDIA="localhost:8888/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing"</span>
+
+<span class="comment"># Generate test configs</span>
+<span class="cmd">python scripts/generate_test_data.py</span>
+
+<span class="comment"># Get auto-login cookies</span>
+<span class="cmd">mkdir -p</span> <span class="value">./.auth</span>
+<span class="cmd">python browser_env/auto_login.py</span>
+
+<span class="comment"># Run evaluation (812 tasks)</span>
+<span class="cmd">python run.py</span> \
+    <span class="flag">--instruction_path</span> <span class="value">agent/prompts/jsons/p_cot_id_actree_2s.json</span> \
+    <span class="flag">--test_start_idx</span> <span class="value">0</span> \
+    <span class="flag">--test_end_idx</span> <span class="value">812</span> \
+    <span class="flag">--model</span> <span class="value">local_llm</span> \
+    <span class="flag">--result_dir</span> <span class="value">./results_cwf</span>
+    </div>
+
+    <h3 class="section-subtitle">6.4 OSWorld Setup</h3>
+    <div class="code-block">
+<span class="comment"># Install OSWorld</span>
+<span class="cmd">git clone</span> <span class="value">https://github.com/xlang-ai/OSWorld.git</span>
+<span class="cmd">cd</span> <span class="value">OSWorld</span>
+<span class="cmd">pip install -r</span> <span class="value">requirements.txt</span>
+
+<span class="comment"># Verify KVM support</span>
+<span class="cmd">egrep -c</span> <span class="value">'(vmx|svm)' /proc/cpuinfo</span>
+
+<span class="comment"># Quick start (validates environment)</span>
+<span class="cmd">python quickstart.py</span> <span class="flag">--provider_name</span> <span class="value">docker</span>
+
+<span class="comment"># Run parallel evaluation (Docker+KVM)</span>
+<span class="cmd">python scripts/python/run_multienv.py</span> \
+    <span class="flag">--provider_name</span> <span class="value">docker</span> \
+    <span class="flag">--headless</span> \
+    <span class="flag">--observation_type</span> <span class="value">screenshot</span> \
+    <span class="flag">--model</span> <span class="value">local_llm</span> \
+    <span class="flag">--sleep_after_execution</span> <span class="value">3</span> \
+    <span class="flag">--max_steps</span> <span class="value">15</span> \
+    <span class="flag">--num_envs</span> <span class="value">10</span> \
+    <span class="flag">--client_password</span> <span class="value">password</span>
+
+<span class="comment"># Show results</span>
+<span class="cmd">python show_result.py</span> <span class="flag">--detailed</span>
+    </div>
+
+    <h3 class="section-subtitle">6.5 AppWorld Setup</h3>
+    <div class="code-block">
+<span class="comment"># Install AppWorld</span>
+<span class="cmd">pip install</span> <span class="value">appworld</span>
+<span class="cmd">appworld install</span>
+<span class="cmd">appworld download data</span>
+
+<span class="comment"># Verify installation (~2-3 min)</span>
+<span class="cmd">appworld verify tests</span>
+<span class="cmd">appworld verify tasks</span>
+
+<span class="comment"># Install agent experiments package</span>
+<span class="cmd">git clone</span> <span class="value">https://github.com/StonyBrookNLP/appworld.git</span>
+<span class="cmd">cd</span> <span class="value">appworld</span>
+<span class="cmd">pip install -e</span> <span class="value">"experiments[simplified]"</span>
+
+<span class="comment"># Run agent (uses local LLM via OpenAI-compatible API)</span>
+<span class="cmd">export</span> <span class="value">OPENAI_BASE_URL="http://localhost:8000/v1"</span>  <span class="comment"># vLLM endpoint</span>
+<span class="cmd">export</span> <span class="value">OPENAI_API_KEY="not-needed"</span>
+
+<span class="cmd">appworld run auto</span> \
+    <span class="flag">--agent-name</span> <span class="value">simplified_function_calling_agent</span> \
+    <span class="flag">--model-name</span> <span class="value">local-llm</span> \
+    <span class="flag">--dataset-name</span> <span class="value">test_normal</span>
+
+<span class="comment"># Evaluate</span>
+<span class="cmd">appworld evaluate</span> <span class="value">cwf_baseline test_normal</span>
+    </div>
+
+    <h3 class="section-subtitle">6.6 LLM Inference Server (vLLM)</h3>
+    <div class="code-block">
+<span class="comment"># Start vLLM server with CPU (OpenVINO backend)</span>
+<span class="cmd">vllm serve</span> <span class="value">meta-llama/Llama-3.1-8B-Instruct</span> \
+    <span class="flag">--device</span> <span class="value">cpu</span> \
+    <span class="flag">--dtype</span> <span class="value">auto</span> \
+    <span class="flag">--tensor-parallel-size</span> <span class="value">1</span> \
+    <span class="flag">--port</span> <span class="value">8000</span> \
+    <span class="flag">--max-model-len</span> <span class="value">8192</span> \
+    <span class="flag">--cpu-offload-gb</span> <span class="value">0</span>
+
+<span class="comment"># OR: llama.cpp server</span>
+<span class="cmd">llama-server</span> \
+    <span class="flag">-m</span> <span class="value">./models/llama-3.1-8b-instruct-q4_k_m.gguf</span> \
+    <span class="flag">--host</span> <span class="value">0.0.0.0</span> \
+    <span class="flag">--port</span> <span class="value">8000</span> \
+    <span class="flag">-c</span> <span class="value">8192</span> \
+    <span class="flag">-t</span> <span class="value">64</span> \
+    <span class="flag">-ngl</span> <span class="value">0</span> \
+    <span class="flag">--batch-size</span> <span class="value">512</span>
+
+<span class="comment"># Pin inference to specific cores (example: cores 0-63)</span>
+<span class="cmd">numactl --cpunodebind=0 --membind=0</span> <span class="value">llama-server ...</span>
+    </div>
+</div>
+
+<!-- Section 7: KPIs -->
+<div class="section" id="kpis">
+    <h2 class="section-title">7. KPIs & Metrics</h2>
+
+    <h3 class="section-subtitle">7.1 Primary KPIs (Per Benchmark)</h3>
+    <table>
+        <tr>
+            <th>Benchmark</th>
+            <th>Primary KPI</th>
+            <th>Secondary KPIs</th>
+            <th>Unit</th>
+        </tr>
+        <tr>
+            <td>SWE-bench</td>
+            <td><strong>resolve_rate</strong></td>
+            <td>avg_cost_per_task, avg_turns, avg_time_per_task</td>
+            <td>% (tasks passing)</td>
+        </tr>
+        <tr>
+            <td>WebArena</td>
+            <td><strong>success_rate</strong></td>
+            <td>avg_steps, avg_time, token_count</td>
+            <td>% (tasks completed)</td>
+        </tr>
+        <tr>
+            <td>OSWorld</td>
+            <td><strong>success_rate</strong></td>
+            <td>per_domain_rate, avg_steps, screenshot_accuracy</td>
+            <td>% (tasks completed)</td>
+        </tr>
+        <tr>
+            <td>AppWorld</td>
+            <td><strong>task_completion_rate</strong></td>
+            <td>SGC_score, api_calls_count, avg_interactions</td>
+            <td>% (tasks passing eval)</td>
+        </tr>
+        <tr>
+            <td>T-Bench</td>
+            <td><strong>tool_accuracy</strong></td>
+            <td>param_accuracy, workflow_completion, retry_rate</td>
+            <td>% (correct tool calls)</td>
+        </tr>
+    </table>
+
+    <h3 class="section-subtitle">7.2 Platform Performance KPIs</h3>
+    <table>
+        <tr>
+            <th>Category</th>
+            <th>Metric</th>
+            <th>Unit</th>
+            <th>Collection Method</th>
+        </tr>
+        <tr><td rowspan="4">LLM Inference</td><td>Prefill tokens/sec</td><td>tok/s</td><td>vLLM metrics / llama.cpp logs</td></tr>
+        <tr><td>Decode tokens/sec</td><td>tok/s</td><td>vLLM metrics / llama.cpp logs</td></tr>
+        <tr><td>Time-to-first-token (TTFT)</td><td>ms</td><td>Client-side measurement</td></tr>
+        <tr><td>Total tokens generated per task</td><td>count</td><td>API response accumulator</td></tr>
+        <tr><td rowspan="3">Throughput</td><td>Tasks completed per hour</td><td>tasks/hr</td><td>Orchestrator timer</td></tr>
+        <tr><td>Aggregate throughput (multi-instance)</td><td>tasks/hr</td><td>Sum across instances</td></tr>
+        <tr><td>Instance throughput degradation</td><td>%</td><td>(baseline - current) / baseline × 100</td></tr>
+        <tr><td rowspan="3">Efficiency</td><td>Package power</td><td>watts</td><td>RAPL / TPMI sysfs</td></tr>
+        <tr><td>Tasks per watt-hour</td><td>tasks/Wh</td><td>Computed: tasks / (watts × hours)</td></tr>
+        <tr><td>Tokens per watt</td><td>tok/W</td><td>Computed: decode_tok_s / pkg_watts</td></tr>
+        <tr><td rowspan="4">Microarchitecture</td><td>IPC</td><td>ratio</td><td>EMON</td></tr>
+        <tr><td>Memory Bandwidth Utilization</td><td>%</td><td>EMON</td></tr>
+        <tr><td>LLC MPKI</td><td>misses/1K inst</td><td>EMON</td></tr>
+        <tr><td>TMA Backend Bound %</td><td>%</td><td>EMON</td></tr>
+    </table>
+
+    <h3 class="section-subtitle">7.3 EMON Collection Plan</h3>
+    <div class="info-box architecture">
+        <strong>EMON Strategy for Agentic Workloads</strong>
+        Agentic workloads are bursty — long idle waits for LLM response followed by burst environment activity. Use <strong>time-series EMON</strong> (not just summary) to capture phase behavior. Recommended: 100ms sample interval, socket-view + core-view for placement analysis.
+    </div>
+    <table>
+        <tr>
+            <th>Phase</th>
+            <th>EMON Views</th>
+            <th>Key Events</th>
+        </tr>
+        <tr>
+            <td>LLM Inference (decode)</td>
+            <td>Socket + Core</td>
+            <td>MEM_BW, IPC, frequency, TMA L1/L2</td>
+        </tr>
+        <tr>
+            <td>Environment Execution</td>
+            <td>Socket + Core</td>
+            <td>LLC misses, branch mispredict, I/O bandwidth</td>
+        </tr>
+        <tr>
+            <td>Multi-Instance Scaling</td>
+            <td>Socket + Uncore</td>
+            <td>Cross-socket traffic, memory controller utilization</td>
+        </tr>
+    </table>
+</div>
+
+<!-- Section 8: Execution Phases -->
+<div class="section" id="phases">
+    <h2 class="section-title">8. Execution Phases & Timeline</h2>
+
+    <div class="timeline">
+        <div class="timeline-item">
+            <h4>Phase 0: Environment Validation (Day 1)</h4>
+            <p><strong>Goal:</strong> Confirm CWF system is ready — Docker, KVM, Python 3.11, storage, memory.</p>
+            <ul style="margin-top:8px; padding-left:18px; font-size:0.88rem;">
+                <li>Verify KVM: <code>egrep -c '(vmx|svm)' /proc/cpuinfo</code></li>
+                <li>Docker: run hello-world container</li>
+                <li>Storage: confirm 200+ GB free</li>
+                <li>Memory: confirm 128+ GB available</li>
+                <li>Install vLLM / llama.cpp, download model weights</li>
+                <li>Validate inference: run simple prompt, measure tokens/sec baseline</li>
+            </ul>
+        </div>
+
+        <div class="timeline-item">
+            <h4>Phase 1: AppWorld + T-Bench (Days 2–3)</h4>
+            <p><strong>Goal:</strong> Lightweight benchmarks first — fastest iteration, validate full pipeline.</p>
+            <ul style="margin-top:8px; padding-left:18px; font-size:0.88rem;">
+                <li>AppWorld: install, verify, run on dev set (quick feedback)</li>
+                <li>T-Bench: setup mock API server, run full suite</li>
+                <li>Measure: inference tokens/sec, task completion rate, end-to-end latency</li>
+                <li>Core scaling: sweep inference cores 16→32→64→128</li>
+                <li>Multi-instance: 1→2→4 AppWorld agents in parallel</li>
+            </ul>
+        </div>
+
+        <div class="timeline-item">
+            <h4>Phase 2: SWE-bench (Days 4–6)</h4>
+            <p><strong>Goal:</strong> Software engineering benchmark — Docker-based, moderate complexity.</p>
+            <ul style="margin-top:8px; padding-left:18px; font-size:0.88rem;">
+                <li>Pull Docker images for SWE-bench Lite (300 tasks)</li>
+                <li>Run gold-patch validation first</li>
+                <li>Agent evaluation: SWE-agent + local LLM</li>
+                <li>Core scaling: vary max_workers (1,2,4,8,16)</li>
+                <li>EMON collection during peak load</li>
+                <li>Measure: resolve_rate, time/task, storage I/O</li>
+            </ul>
+        </div>
+
+        <div class="timeline-item">
+            <h4>Phase 3: WebArena (Days 7–9)</h4>
+            <p><strong>Goal:</strong> Full web services deployment — tests multi-container orchestration.</p>
+            <ul style="margin-top:8px; padding-left:18px; font-size:0.88rem;">
+                <li>Deploy 5 web services (Shopping, GitLab, Reddit, Wikipedia, Map)</li>
+                <li>Validate each service is accessible</li>
+                <li>Run 812-task evaluation</li>
+                <li>Monitor: Docker resource usage, network I/O, memory pressure</li>
+                <li>Placement experiment: services co-located vs spread across NUMA</li>
+            </ul>
+        </div>
+
+        <div class="timeline-item">
+            <h4>Phase 4: OSWorld (Days 10–12)</h4>
+            <p><strong>Goal:</strong> Desktop VM benchmark — heaviest workload, tests KVM + vision model.</p>
+            <ul style="margin-top:8px; padding-left:18px; font-size:0.88rem;">
+                <li>Verify Docker+KVM nested virtualization</li>
+                <li>Download Ubuntu VM images</li>
+                <li>Run with num_envs scaling: 1→2→4→8→10</li>
+                <li>Requires multimodal model (screenshot) — may need larger model</li>
+                <li>Measure: per-domain success rate, VM boot time, screenshot capture latency</li>
+            </ul>
+        </div>
+
+        <div class="timeline-item">
+            <h4>Phase 5: Full Scaling Characterization (Days 13–15)</h4>
+            <p><strong>Goal:</strong> Combined scaling study across all benchmarks with EMON.</p>
+            <ul style="margin-top:8px; padding-left:18px; font-size:0.88rem;">
+                <li>Best-performing config from each phase</li>
+                <li>Full EMON collection (socket + core + uncore views)</li>
+                <li>Power characterization: RAPL at each scaling point</li>
+                <li>Topology experiments: compact vs spread placement</li>
+                <li>Generate final comparison report</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Section 9: Risks -->
+<div class="section" id="risks">
+    <h2 class="section-title">9. Risks & Mitigations</h2>
+
+    <table>
+        <tr>
+            <th>Risk</th>
+            <th>Severity</th>
+            <th>Impact</th>
+            <th>Mitigation</th>
+        </tr>
+        <tr>
+            <td>LLM inference too slow on E-cores (low IPC)</td>
+            <td><span class="tag tag-high">High</span></td>
+            <td>Tasks timeout, low success rate</td>
+            <td>Use INT4 quantization; increase decode batch; try smaller models first</td>
+        </tr>
+        <tr>
+            <td>Insufficient memory for 70B model + environments</td>
+            <td><span class="tag tag-medium">Medium</span></td>
+            <td>OOM kills, failed tasks</td>
+            <td>Start with 8B model; monitor RSS; use memory-mapped GGUF</td>
+        </tr>
+        <tr>
+            <td>OSWorld KVM not supported in nested virt</td>
+            <td><span class="tag tag-medium">Medium</span></td>
+            <td>Cannot run OSWorld benchmark</td>
+            <td>Verify KVM before Phase 4; fall back to VMware if needed</td>
+        </tr>
+        <tr>
+            <td>Docker image pull bandwidth (120+ GB for SWE-bench)</td>
+            <td><span class="tag tag-low">Low</span></td>
+            <td>Slow setup, wasted time</td>
+            <td>Pre-pull images overnight; use local registry cache</td>
+        </tr>
+        <tr>
+            <td>Benchmark non-determinism confounds scaling study</td>
+            <td><span class="tag tag-medium">Medium</span></td>
+            <td>Can't distinguish platform effect from LLM variance</td>
+            <td>Run 3+ repetitions per config; report mean + stddev; fix random seed where possible</td>
+        </tr>
+        <tr>
+            <td>WebArena services consume too many resources</td>
+            <td><span class="tag tag-low">Low</span></td>
+            <td>Starves inference cores</td>
+            <td>Pin service containers to dedicated cpuset; monitor with cgroups</td>
+        </tr>
+        <tr>
+            <td>Model quality too low for meaningful benchmark scores</td>
+            <td><span class="tag tag-high">High</span></td>
+            <td>0% pass rate makes scaling study meaningless</td>
+            <td>Validate with known-good model (API) first to establish ceiling; use 32B+ for SWE-bench</td>
+        </tr>
+        <tr>
+            <td>Thermal throttling at full core utilization</td>
+            <td><span class="tag tag-medium">Medium</span></td>
+            <td>Performance drops during sustained load</td>
+            <td>Monitor freq + temp; ensure adequate cooling; run steady-state warmup</td>
+        </tr>
+    </table>
+
+    <div class="info-box warning">
+        <strong>Critical Success Factor</strong>
+        The #1 risk is model quality vs. inference speed tradeoff. A fast but inaccurate small model gives meaningless benchmark scores. Recommendation: Start with 8B for pipeline validation, then use 32B+ for actual characterization data. Consider running a cloud-API baseline (GPT-4o) to establish the "ceiling" score before local inference testing.
+    </div>
+</div>
+
+<!-- Section 10: Prerequisites Summary -->
+<div class="section">
+    <h2 class="section-title">10. Hardware & Software Prerequisites</h2>
+
+    <h3 class="section-subtitle">Hardware Requirements</h3>
+    <table>
+        <tr><th>Resource</th><th>Minimum</th><th>Recommended</th><th>Notes</th></tr>
+        <tr><td>CPU Cores</td><td>64</td><td>144+</td><td>More cores = more parallel instances</td></tr>
+        <tr><td>RAM</td><td>128 GB</td><td>256+ GB</td><td>Model weights + Docker + VMs</td></tr>
+        <tr><td>Storage</td><td>500 GB SSD</td><td>1 TB NVMe</td><td>Docker images + model weights + results</td></tr>
+        <tr><td>KVM Support</td><td>Required (OSWorld)</td><td>—</td><td>VT-x flag in BIOS</td></tr>
+        <tr><td>Network</td><td>1 Gbps</td><td>10+ Gbps</td><td>Model download, Docker pulls</td></tr>
+    </table>
+
+    <h3 class="section-subtitle">Software Stack</h3>
+    <table>
+        <tr><th>Component</th><th>Version</th><th>Purpose</th></tr>
+        <tr><td>OS</td><td>Ubuntu 22.04+ / RHEL 9+</td><td>Base operating system</td></tr>
+        <tr><td>Python</td><td>3.11+</td><td>Required by AppWorld; compatible with all</td></tr>
+        <tr><td>Docker</td><td>24.0+</td><td>Container runtime</td></tr>
+        <tr><td>QEMU/KVM</td><td>7.0+</td><td>OSWorld VM hosting</td></tr>
+        <tr><td>vLLM</td><td>0.6+</td><td>LLM inference server</td></tr>
+        <tr><td>Playwright</td><td>Latest</td><td>WebArena browser automation</td></tr>
+        <tr><td>Git LFS</td><td>Latest</td><td>AppWorld bundle files</td></tr>
+        <tr><td>Conda/Mamba</td><td>Latest</td><td>Environment isolation</td></tr>
+    </table>
+
+    <h3 class="section-subtitle">Model Weights to Download</h3>
+    <table>
+        <tr><th>Model</th><th>Format</th><th>Size</th><th>Source</th></tr>
+        <tr><td>Llama-3.1-8B-Instruct</td><td>GGUF Q4_K_M</td><td>~5 GB</td><td>huggingface.co/TheBloke/</td></tr>
+        <tr><td>Qwen2.5-Coder-32B-Instruct</td><td>GGUF Q4_K_M</td><td>~18 GB</td><td>huggingface.co</td></tr>
+        <tr><td>Llama-3.1-70B-Instruct</td><td>GGUF Q4_K_M</td><td>~38 GB</td><td>huggingface.co</td></tr>
+    </table>
+</div>
+
+<!-- Section: Expected Results -->
+<div class="section">
+    <h2 class="section-title">11. Expected Outcomes & Success Criteria</h2>
+
+    <div class="chart-container">
+        <canvas id="expectedChart"></canvas>
+    </div>
+
+    <table>
+        <tr>
+            <th>Metric</th>
+            <th>Minimum Acceptable</th>
+            <th>Target</th>
+            <th>Stretch Goal</th>
+        </tr>
+        <tr>
+            <td>Decode tokens/sec (8B, INT4, 64 cores)</td>
+            <td>10 tok/s</td>
+            <td>25+ tok/s</td>
+            <td>40+ tok/s</td>
+        </tr>
+        <tr>
+            <td>SWE-bench Lite resolve rate (32B model)</td>
+            <td>5%</td>
+            <td>15%+</td>
+            <td>25%+ (near SoTA local)</td>
+        </tr>
+        <tr>
+            <td>AppWorld test_normal completion</td>
+            <td>10%</td>
+            <td>25%+</td>
+            <td>40%+</td>
+        </tr>
+        <tr>
+            <td>Multi-instance scaling efficiency</td>
+            <td>60% (at 4 instances)</td>
+            <td>80%+ (at 4 instances)</td>
+            <td>90%+ linear</td>
+        </tr>
+        <tr>
+            <td>Tasks per watt-hour (AppWorld, 4 instances)</td>
+            <td>Measured (baseline)</td>
+            <td>&gt; GNR at same task rate</td>
+            <td>2× GNR efficiency</td>
+        </tr>
+    </table>
+
+    <div class="info-box success">
+        <strong>Definition of Success</strong>
+        This study succeeds if we can: (1) Establish CWF's tokens/sec performance envelope for local LLM inference, (2) Demonstrate multi-instance scaling behavior, (3) Identify the optimal core partitioning for inference+environment, (4) Quantify CWF's efficiency advantage (tasks/watt) vs P-core platforms, (5) Produce actionable data for CWF positioning in the agentic AI market.
+    </div>
+</div>
+
+</div><!-- /container -->
+
+<!-- Footer -->
+<div class="footer">
+    <p>Intel Confidential | DPG PAIV SO | Platform PnP Benchmark Suite | Generated: 2026-06-04</p>
+    <p style="margin-top:4px;">Clearwater Forest Agentic AI Workload Characterization — Test Plan v1.0</p>
+</div>
+
+<!-- Charts -->
+<script>
+// Scaling Study Chart
+const ctx1 = document.getElementById('scalingChart').getContext('2d');
+new Chart(ctx1, {
+    type: 'line',
+    data: {
+        labels: ['16', '32', '64', '96', '128', '192'],
+        datasets: [{
+            label: 'Expected Decode tok/s (8B INT4)',
+            data: [6, 12, 22, 30, 36, 42],
+            borderColor: '#0054ae',
+            backgroundColor: 'rgba(0,84,174,0.1)',
+            fill: true,
+            tension: 0.3
+        }, {
+            label: 'Expected Decode tok/s (32B INT4)',
+            data: [2, 4, 8, 12, 15, 18],
+            borderColor: '#00aeef',
+            backgroundColor: 'rgba(0,174,239,0.1)',
+            fill: true,
+            tension: 0.3
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            title: { display: true, text: 'Phase 1: Inference Core Scaling (Expected)', font: { size: 14 } }
+        },
+        scales: {
+            x: { title: { display: true, text: 'Inference Cores Allocated' } },
+            y: { title: { display: true, text: 'Decode Tokens/sec' }, beginAtZero: true }
+        }
+    }
+});
+
+// Resource Chart
+const ctx2 = document.getElementById('resourceChart').getContext('2d');
+new Chart(ctx2, {
+    type: 'bar',
+    data: {
+        labels: ['SWE-bench', 'WebArena', 'OSWorld', 'AppWorld', 'T-Bench'],
+        datasets: [{
+            label: 'RAM (GB)',
+            data: [16, 32, 64, 4, 2],
+            backgroundColor: '#0054ae'
+        }, {
+            label: 'Storage (GB)',
+            data: [120, 50, 100, 10, 2],
+            backgroundColor: '#00aeef'
+        }, {
+            label: 'Docker Containers',
+            data: [8, 6, 2, 1, 1],
+            backgroundColor: '#7c5cfc'
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            title: { display: true, text: 'Resource Requirements Per Benchmark', font: { size: 14 } }
+        },
+        scales: {
+            x: { title: { display: true, text: 'Benchmark' } },
+            y: { title: { display: true, text: 'Resource Units' }, beginAtZero: true }
+        }
+    }
+});
+
+// Expected Outcomes Chart
+const ctx3 = document.getElementById('expectedChart').getContext('2d');
+new Chart(ctx3, {
+    type: 'bar',
+    data: {
+        labels: ['1 Instance', '2 Instances', '4 Instances', '8 Instances', '16 Instances'],
+        datasets: [{
+            label: 'Aggregate Tasks/Hour (Expected)',
+            data: [4, 7.5, 14, 24, 38],
+            backgroundColor: 'rgba(0,84,174,0.7)',
+            borderColor: '#0054ae',
+            borderWidth: 1
+        }, {
+            label: 'Linear Scaling (Ideal)',
+            data: [4, 8, 16, 32, 64],
+            type: 'line',
+            borderColor: '#1b8a3e',
+            borderDash: [5, 5],
+            fill: false,
+            pointStyle: 'dash'
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            title: { display: true, text: 'Phase 2: Multi-Instance Scaling (Projected)', font: { size: 14 } }
+        },
+        scales: {
+            x: { title: { display: true, text: 'Agent Instances' } },
+            y: { title: { display: true, text: 'Tasks/Hour' }, beginAtZero: true }
+        }
+    }
+});
+</script>
+
+</body>
+</html>
