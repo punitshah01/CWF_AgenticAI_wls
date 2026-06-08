@@ -1,0 +1,216 @@
+# ============================================================================
+# configs/assets.yaml — CWF Agentic AI: Canonical Asset Manifest
+# ============================================================================
+# Defines ALL Docker images and large static files needed by the 5 benchmarks.
+# Used by scripts/prefetch_assets.py to:
+#   1. Pull images/files from the internet ONCE
+#   2. Push/mirror them to a local registry or Intel Artifactory
+#   3. Allow fully offline re-runs without internet access
+#
+# Usage:
+#   python3 scripts/prefetch_assets.py pull          # download everything
+#   python3 scripts/prefetch_assets.py push          # mirror to registry
+#   python3 scripts/prefetch_assets.py start-registry   # start local registry
+#   python3 scripts/prefetch_assets.py status        # show cache state
+#
+# Registry config (choose one):
+#   Local:       REGISTRY_URL=localhost:5000    (default — registry:2 container)
+#   Artifactory: REGISTRY_URL=<your-artifactory-host>/docker-local
+# ============================================================================
+
+# ── Local registry settings ────────────────────────────────────────────────
+registry:
+  # Override with env var REGISTRY_URL or --registry CLI flag
+  url: "localhost:5000"
+  # Namespace prefix inside the registry
+  namespace: "cwf-agentic"
+  # Port for local registry:2 container
+  local_port: 5000
+  # Where to store local registry data on disk
+  local_data_dir: "assets/registry-data"
+
+# ── Docker images ─────────────────────────────────────────────────────────
+# Format per image:
+#   source:      full pull path (DockerHub / ghcr.io / etc.)
+#   tag:         image tag
+#   description: human summary
+#   size_gb:     approximate compressed size
+#   required:    pull even without --include-optional (default: true)
+docker_images:
+
+  # ── SWE-bench ──────────────────────────────────────────────────────────
+  swebench:
+    - source: "swebench/sweb.base.x86_64"
+      tag: "latest"
+      description: "SWE-bench: shared base layer for all per-task eval containers"
+      size_gb: 2.1
+      required: true
+
+    # Per-repo evaluation images.  300 images for Lite, 500 for Verified, 2294 for Full.
+    # Pull selectively with:  --include-swebench-tasks lite|verified|full
+    # Listed here as a template; actual list is generated from the SWE-bench dataset.
+    # We cache the most common 10 repos to validate the setup.
+    - source: "swebench/sweb.eval.x86_64.sympy__sympy"
+      tag: "latest"
+      description: "SWE-bench eval image: sympy (validation task)"
+      size_gb: 1.8
+      required: true
+
+    - source: "swebench/sweb.eval.x86_64.django__django"
+      tag: "latest"
+      description: "SWE-bench eval image: django"
+      size_gb: 2.0
+      required: false
+
+    - source: "swebench/sweb.eval.x86_64.scikit-learn__scikit-learn"
+      tag: "latest"
+      description: "SWE-bench eval image: scikit-learn"
+      size_gb: 2.5
+      required: false
+
+    - source: "swebench/sweb.eval.x86_64.matplotlib__matplotlib"
+      tag: "latest"
+      description: "SWE-bench eval image: matplotlib"
+      size_gb: 3.0
+      required: false
+
+    - source: "swebench/sweb.eval.x86_64.pytest-dev__pytest"
+      tag: "latest"
+      description: "SWE-bench eval image: pytest"
+      size_gb: 1.5
+      required: false
+
+    - source: "swebench/sweb.eval.x86_64.astropy__astropy"
+      tag: "latest"
+      description: "SWE-bench eval image: astropy"
+      size_gb: 2.8
+      required: false
+
+  # ── WebArena — 6 self-hosted service containers ──────────────────────────
+  webarena:
+    - source: "webarena/shopping"
+      tag: "latest"
+      description: "WebArena: Magento e-commerce site (OneStopShop)"
+      size_gb: 8.0
+      required: true
+
+    - source: "webarena/shopping_admin"
+      tag: "latest"
+      description: "WebArena: Magento admin console"
+      size_gb: 8.0
+      required: true
+
+    - source: "webarena/forum"
+      tag: "latest"
+      description: "WebArena: Postmill Reddit-like forum"
+      size_gb: 2.5
+      required: true
+
+    - source: "webarena/gitlab"
+      tag: "latest"
+      description: "WebArena: GitLab CE instance"
+      size_gb: 3.0
+      required: true
+
+    - source: "webarena/wikipedia"
+      tag: "latest"
+      description: "WebArena: Wikipedia snapshot (Kiwix)"
+      size_gb: 8.0
+      required: true
+
+    - source: "webarena/map"
+      tag: "latest"
+      description: "WebArena: OpenStreetMap / OSRM routing"
+      size_gb: 4.5
+      required: true
+
+  # ── OSWorld — VM controller (QEMU managed via Docker) ────────────────────
+  osworld:
+    - source: "xlangai/ubuntu_osworld"
+      tag: "latest"
+      description: "OSWorld: QEMU-KVM environment controller"
+      size_gb: 1.5
+      required: true
+
+  # ── Utility ──────────────────────────────────────────────────────────────
+  utility:
+    - source: "registry"
+      tag: "2"
+      description: "Local Docker registry (runs the mirror)"
+      size_gb: 0.03
+      required: true
+
+    - source: "python"
+      tag: "3.11-slim"
+      description: "Python 3.11 slim base for test containers"
+      size_gb: 0.12
+      required: false
+
+# ── Large static files ────────────────────────────────────────────────────
+# Download once and store in assets/. Supply sha256 after first download.
+# Scripts use wget -c (resume) so partial downloads are safe.
+large_files:
+
+  # ── OSWorld VM disk images ─────────────────────────────────────────────
+  # Source: https://huggingface.co/datasets/xlangai/ubuntu_osworld
+  osworld_vm_ubuntu:
+    url: "https://huggingface.co/datasets/xlangai/ubuntu_osworld/resolve/main/Ubuntu0.qcow2"
+    dest: "assets/vm_images/Ubuntu0.qcow2"
+    size_gb: 9.5
+    sha256: ""          # fill after first download (sha256sum assets/vm_images/Ubuntu0.qcow2)
+    description: "OSWorld: Ubuntu 22.04 desktop QEMU image (base)"
+    benchmark: osworld
+    required: true
+
+  osworld_vm_snapshot:
+    url: "https://huggingface.co/datasets/xlangai/ubuntu_osworld/resolve/main/Ubuntu0_copy.qcow2"
+    dest: "assets/vm_images/Ubuntu0_copy.qcow2"
+    size_gb: 9.5
+    sha256: ""
+    description: "OSWorld: Ubuntu snapshot for fast VM reset"
+    benchmark: osworld
+    required: true
+
+  # ── SWE-bench datasets (Parquet, direct HuggingFace download) ─────────
+  swebench_lite_test:
+    url: "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite/resolve/main/data/test-00000-of-00001.parquet"
+    dest: "assets/datasets/swebench_lite_test.parquet"
+    size_gb: 0.05
+    sha256: ""
+    description: "SWE-bench Lite test split (300 tasks)"
+    benchmark: swebench
+    required: true
+
+  swebench_verified_test:
+    url: "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified/resolve/main/data/test-00000-of-00001.parquet"
+    dest: "assets/datasets/swebench_verified_test.parquet"
+    size_gb: 0.08
+    sha256: ""
+    description: "SWE-bench Verified test split (500 tasks)"
+    benchmark: swebench
+    required: false
+
+  # ── Miniconda installer (avoids re-downloading during setup) ──────────
+  miniconda_installer:
+    url: "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
+    dest: "assets/installers/Miniconda3-latest-Linux-x86_64.sh"
+    size_gb: 0.10
+    sha256: ""
+    description: "Miniconda3 Linux x86_64 installer"
+    benchmark: all
+    required: false
+
+# ── pip / conda wheel cache ───────────────────────────────────────────────
+# Cache directories — no download config needed, just document the paths
+pip_cache:
+  description: |
+    Python wheel cache.  Set PIP_CACHE_DIR=<shared_dir> or pass
+    --cache-dir to pip to reuse across nodes.
+    Example: export PIP_CACHE_DIR=/data/cache/pip
+  suggested_path: "assets/pip-cache"
+
+conda_cache:
+  description: |
+    Conda package cache.  Set CONDA_PKGS_DIRS or add pkgs_dirs to ~/.condarc.
+    Example: conda config --add pkgs_dirs /data/cache/conda/pkgs
+  suggested_path: "assets/conda-cache"

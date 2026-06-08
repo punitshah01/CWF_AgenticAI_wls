@@ -44,6 +44,14 @@ from typing import Dict, List, Optional
 CONDA_ENV_DEFAULT = "agentic"
 PYTHON_VERSION_DEFAULT = "3.11"
 
+# Registry — override with --registry or REGISTRY_URL env var.
+# When set, Docker images are pulled from <registry>/cwf-agentic/<name>:<tag>
+# instead of Docker Hub.  Set to empty string to pull from internet (default).
+REGISTRY_URL_DEFAULT = os.environ.get("REGISTRY_URL", "")
+
+# Path to pre-downloaded Miniconda installer (avoids internet if set)
+MINICONDA_LOCAL = os.environ.get("MINICONDA_LOCAL", "assets/installers/Miniconda3-latest-Linux-x86_64.sh")
+
 # Minimum Python per benchmark (enforced at runtime, not by conda)
 PYTHON_MIN = {
     "swebench": (3, 10),
@@ -437,17 +445,18 @@ def get_conda_python(env_name: str) -> Optional[str]:
     return None
 
 def pip_install(packages: List[str], conda_env: str, dry_run: bool,
-                extra_index: str = "") -> None:
+                extra_index: str = "", pip_cache_dir: str = "") -> None:
     """Install a list of pip packages in the given conda env."""
     if not packages:
         return
     idx_flag = f"--extra-index-url {extra_index}" if extra_index else ""
+    cache_flag = f"--cache-dir {pip_cache_dir}" if pip_cache_dir else ""
     # Chunk into groups of 20 to avoid very long command lines
     chunk_size = 20
     for i in range(0, len(packages), chunk_size):
         chunk = packages[i:i + chunk_size]
         pkg_str = " ".join(f'"{p}"' for p in chunk)
-        cmd = f'conda run -n {conda_env} pip install --quiet {idx_flag} {pkg_str}'
+        cmd = f'conda run -n {conda_env} pip install --quiet {cache_flag} {idx_flag} {pkg_str}'
         run(cmd, dry_run=dry_run, check=False)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -590,7 +599,13 @@ def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> str:
         miniconda_url = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
         home = Path.home()
         installer = "/tmp/miniconda.sh"
-        run(f"wget -q {miniconda_url} -O {installer}", dry_run=dry_run, check=False)
+        # Use cached installer if available (pre-fetched by prefetch_assets.py)
+        cached = Path(MINICONDA_LOCAL)
+        if cached.exists():
+            log(f"Using cached Miniconda installer: {cached}", "ok")
+            installer = str(cached)
+        else:
+            run(f"wget -q {miniconda_url} -O {installer}", dry_run=dry_run, check=False)
         run(f"bash {installer} -b -p {home}/miniconda3", dry_run=dry_run, check=False)
         run(f"{home}/miniconda3/bin/conda init bash", dry_run=dry_run, check=False)
         os.environ["PATH"] = f"{home}/miniconda3/bin:" + os.environ.get("PATH", "")
@@ -639,8 +654,13 @@ def setup_playwright(conda_env: str, dry_run: bool) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def install_python_packages(benchmarks: List[str], conda_env: str,
-                             dry_run: bool) -> None:
+                             dry_run: bool, pip_cache_dir: str = "") -> None:
     banner(f"Step 7: Python Packages  (conda env: {conda_env})")
+
+    # Set PIP_CACHE_DIR in environment for all sub-calls
+    if pip_cache_dir:
+        os.environ["PIP_CACHE_DIR"] = pip_cache_dir
+        log(f"pip cache dir: {pip_cache_dir}", "info")
 
     # Upgrade pip first
     run(f"conda run -n {conda_env} pip install --upgrade pip setuptools wheel",
@@ -648,8 +668,9 @@ def install_python_packages(benchmarks: List[str], conda_env: str,
 
     # Torch CPU (CWF: no GPU — explicit CPU-only to avoid downloading CUDA wheels)
     log("Installing PyTorch (CPU-only, for CWF E-core)...", "info")
+    cache_flag = f"--cache-dir {pip_cache_dir}" if pip_cache_dir else ""
     run(
-        f'conda run -n {conda_env} pip install --quiet '
+        f'conda run -n {conda_env} pip install --quiet {cache_flag} '
         f'"torch>=2.5.0" torchvision torchaudio '
         f'--index-url https://download.pytorch.org/whl/cpu',
         dry_run=dry_run, check=False
@@ -670,13 +691,84 @@ def install_python_packages(benchmarks: List[str], conda_env: str,
         new_pkgs = [p for p in pkgs if p.split(">=")[0].split("==")[0].split("~=")[0].split("<")[0].strip().lower() not in installed]
         installed.update(p.split(">=")[0].split("==")[0].split("~=")[0].split("<")[0].strip().lower() for p in pkgs)
 
-        pip_install(new_pkgs, conda_env, dry_run)
+        pip_install(new_pkgs, conda_env, dry_run, pip_cache_dir=pip_cache_dir)
         log(f"  [{bench}] Python packages done", "ok")
 
     # Common inference stack (always installed)
     log("  [inference] Installing vLLM + HuggingFace stack...", "info")
-    pip_install(INFERENCE_PIP, conda_env, dry_run)
+    pip_install(INFERENCE_PIP, conda_env, dry_run, pip_cache_dir=pip_cache_dir)
     log("  [inference] Done", "ok")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Step 5b: Pre-pull Docker images from local registry / artifactory
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Maps benchmark → list of (source_image, tag) tuples needed at runtime.
+# These are the images actually USED when the benchmark runs (not build images).
+_BENCH_RUNTIME_IMAGES: Dict[str, List] = {
+    "swebench": [
+        ("swebench/sweb.base.x86_64", "latest"),
+        ("swebench/sweb.eval.x86_64.sympy__sympy", "latest"),
+    ],
+    "webarena": [
+        ("webarena/shopping",       "latest"),
+        ("webarena/shopping_admin", "latest"),
+        ("webarena/forum",          "latest"),
+        ("webarena/gitlab",         "latest"),
+        ("webarena/wikipedia",      "latest"),
+        ("webarena/map",            "latest"),
+    ],
+    "osworld": [
+        ("xlangai/ubuntu_osworld", "latest"),
+    ],
+    "appworld": [],
+    "tbench":   [],
+}
+
+
+def prefetch_docker_images(benchmarks: List[str], registry: str,
+                           namespace: str, dry_run: bool) -> None:
+    """
+    Pull runtime Docker images.  If ``registry`` is set, images are pulled
+    from  <registry>/<namespace>/<basename>:<tag>  (local/artifactory cache)
+    instead of Docker Hub.  Falls back to Docker Hub on pull failure.
+    """
+    if not shutil.which("docker"):
+        log("docker not found — skipping image pre-pull", "warn")
+        return
+
+    all_images: List = []
+    for bench in benchmarks:
+        all_images.extend(_BENCH_RUNTIME_IMAGES.get(bench, []))
+
+    if not all_images:
+        return
+
+    banner(f"Pre-pulling {len(all_images)} Docker images")
+    if registry:
+        log(f"Using registry: {registry}/{namespace}", "info")
+    else:
+        log("No --registry set — pulling directly from Docker Hub", "info")
+
+    for source, tag in all_images:
+        basename = source.split("/")[-1]
+        if registry:
+            # Try registry first
+            target = f"{registry}/{namespace}/{basename}:{tag}"
+            log(f"  Pulling {target} ...", "info")
+            result = run(f"docker pull {target}", dry_run=dry_run, check=False)
+            if result and result.returncode == 0:
+                # Re-tag to the bare name so workload scripts find it
+                run(f"docker tag {target} {source}:{tag}",
+                    dry_run=dry_run, check=False)
+                log(f"  {source}:{tag} → OK (from registry)", "ok")
+                continue
+            log(f"  Registry pull failed for {target}; falling back to Docker Hub",
+                "warn")
+        # Direct Docker Hub pull (or fallback)
+        run(f"docker pull {source}:{tag}", dry_run=dry_run, check=False)
+        log(f"  {source}:{tag} → OK", "ok")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -781,6 +873,27 @@ def parse_args() -> argparse.Namespace:
                         help=f"Conda environment name. Default: {CONDA_ENV_DEFAULT}")
     parser.add_argument("--python-version", default=PYTHON_VERSION_DEFAULT,
                         help=f"Python version for conda env. Default: {PYTHON_VERSION_DEFAULT}")
+    parser.add_argument(
+        "--registry", default=REGISTRY_URL_DEFAULT,
+        help=(
+            "Docker registry URL for pre-pulling images without internet access. "
+            "Example: localhost:5000  or  ubit-artifactory-or.intel.com/docker-local. "
+            f"Override with REGISTRY_URL env var.  Default: '{REGISTRY_URL_DEFAULT or '(Docker Hub)'}'"
+        ),
+    )
+    parser.add_argument(
+        "--registry-namespace", default="cwf-agentic",
+        help="Namespace/path prefix inside the registry. Default: cwf-agentic",
+    )
+    parser.add_argument(
+        "--skip-image-pull", action="store_true",
+        help="Skip pre-pulling Docker images (useful if images are already cached)",
+    )
+    parser.add_argument(
+        "--pip-cache-dir", default=os.environ.get("PIP_CACHE_DIR", ""),
+        help="Path to pip wheel cache directory. Shared cache avoids re-downloading "
+             "wheels on each run. Override with PIP_CACHE_DIR env var.",
+    )
     return parser.parse_args()
 
 
@@ -800,6 +913,8 @@ def main() -> None:
     print(f"  OS       : {os_info['pretty']}  [{os_info['family']}]")
     print(f"  Benchmarks: {', '.join(args.benchmarks)}")
     print(f"  Conda env : {args.conda_env}  (Python {args.python_version})")
+    print(f"  Registry : {args.registry or '(Docker Hub — internet)'}")
+    print(f"  pip cache: {args.pip_cache_dir or '(default)'}")
     print(f"  Dry run  : {args.dry_run}")
     print()
 
@@ -841,9 +956,17 @@ def main() -> None:
     if any(b in args.benchmarks for b in ("webarena", "osworld", "swebench")):
         setup_playwright(args.conda_env, args.dry_run)
 
+    # ── Pre-pull Docker images from registry (offline-safe)
+    if not args.skip_image_pull:
+        prefetch_docker_images(
+            args.benchmarks, args.registry,
+            args.registry_namespace, args.dry_run,
+        )
+
     # ── Python packages
     if not args.skip_python:
-        install_python_packages(args.benchmarks, args.conda_env, args.dry_run)
+        install_python_packages(args.benchmarks, args.conda_env, args.dry_run,
+                                pip_cache_dir=args.pip_cache_dir)
 
     # ── Post-install
     if not args.skip_post_install:

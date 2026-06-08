@@ -1,2 +1,47 @@
+# ── Registry ──────────────────────────────────────────────────────────────────
+# Override with --registry CLI flag or REGISTRY_URL env var in setup.py /
+# prefetch_assets.py.  Empty = pull directly from Docker Hub / ghcr.io.
+# Examples:
+#   local:       localhost:5000
+#   artifactory: ubit-artifactory-or.intel.com/docker-local
 docker_registry: ""
 docker_image_prefix: "cwf-agentic"
+
+# ── Canonical image map per benchmark ──────────────────────────────────────
+# When docker_registry is set, prefetch_assets.py mirrors these images there
+# under <registry>/<docker_image_prefix>/<basename>:<tag>.
+# setup.py reads docker_registry to rewrite pull URLs at install time.
+images:
+  # SWE-bench
+  swebench_base:    "swebench/sweb.base.x86_64:latest"
+  swebench_sympy:   "swebench/sweb.eval.x86_64.sympy__sympy:latest"
+  swebench_django:  "swebench/sweb.eval.x86_64.django__django:latest"
+
+  # WebArena — 6 self-hosted service containers
+  webarena_shopping:       "webarena/shopping:latest"
+  webarena_shopping_admin: "webarena/shopping_admin:latest"
+  webarena_forum:          "webarena/forum:latest"
+  webarena_gitlab:         "webarena/gitlab:latest"
+  webarena_wikipedia:      "webarena/wikipedia:latest"
+  webarena_map:            "webarena/map:latest"
+
+  # OSWorld VM controller
+  osworld_controller: "xlangai/ubuntu_osworld:latest"
+
+  # Utility
+  local_registry: "registry:2"
+  python_base:    "python:3.11-slim"
+
+# ── Large static asset cache directory ──────────────────────────────────────
+# Root directory where prefetch_assets.py stores VM images and datasets.
+# On a shared lab server, point this at a high-capacity NFS/NAS mount.
+# Default: <repo_root>/assets/
+assets_root: ""   # empty = repo_root/assets
+
+# ── pip / conda offline cache ─────────────────────────────────────────────
+# Set these to share package caches across nodes / re-runs.
+# Values shown are suggestions — override with env vars PIP_CACHE_DIR /
+# CONDA_PKGS_DIRS at runtime.
+pip_cache_dir: ""     # e.g. /data/cache/pip
+conda_cache_dir: ""   # e.g. /data/cache/conda/pkgs
+
