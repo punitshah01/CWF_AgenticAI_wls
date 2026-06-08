@@ -24,16 +24,18 @@
 
 ## CWF Setup
 
-```bash
-bash scripts/setup/setup_appworld.sh
+```python
+python3 benchmarks/appworld/setup.py
+# options:
+python3 benchmarks/appworld/setup.py --dry-run
+python3 benchmarks/appworld/setup.py --skip-post-install
 ```
 
 What it does:
-1. `pip install appworld`
+1. `pip install appworld` (Python 3.11+ required)
 2. `appworld install` — downloads data bundles (~2-3 min)
 3. `appworld download data`
 4. `appworld verify tests && appworld verify tasks`
-5. Clones experiments repo, installs simplified agent
 
 ---
 
@@ -41,43 +43,38 @@ What it does:
 
 ### 1. Start LLM server
 AppWorld is lightweight — 8B model is sufficient for pipeline validation:
-```bash
-bash scripts/inference/start_llamacpp.sh --model 8b --cores 64
+```python
+python3 scripts/inference/start_llamacpp.py --model 8b --cores 64
 ```
 
-### 2. Set LLM endpoint
-```bash
+### 2. Run — integrated runner:
+```python
+# Quick dev validation
+python3 benchmarks/appworld/run.py --model 8b --dataset dev
+
+# Full test_normal
+python3 benchmarks/appworld/run.py --model 32b --dataset test_normal --inference-cores 96
+
+# Hard tasks
+python3 benchmarks/appworld/run.py --model 32b --dataset test_challenge
+
+# Multi-instance (4 parallel agents)
+python3 benchmarks/appworld/run.py --dataset test_normal --num-instances 4
+
+# Dry-run
+python3 benchmarks/appworld/run.py --dry-run
+```
+
+Or manual:
+```python
 export OPENAI_BASE_URL="http://localhost:8000/v1"
 export OPENAI_API_KEY="not-needed"
-```
-
-### 3. Quick dev validation
-```bash
 conda activate agentic
 appworld run auto \
     --agent-name simplified_function_calling_agent \
     --model-name local-llm \
-    --dataset-name dev
-```
-
-### 4. Full test_normal
-```bash
-appworld run auto \
-    --agent-name simplified_function_calling_agent \
-    --model-name local-llm \
     --dataset-name test_normal
-
 appworld evaluate cwf_baseline test_normal
-```
-
-### 5. Hard tasks
-```bash
-appworld run auto \
-    --agent-name simplified_function_calling_agent \
-    --model-name local-llm \
-    --dataset-name test_challenge
-
-appworld evaluate cwf_challenge test_challenge
 ```
 
 ---
@@ -86,12 +83,9 @@ appworld evaluate cwf_challenge test_challenge
 
 AppWorld's Python server is very lightweight. Scale to 4–8 instances easily:
 
-```bash
-# Instance 1 (port 5000, LLM port 8000, env cores 64-71)
-taskset -c 64-71 appworld run auto --dataset-name test_normal &
-
-# Instance 2 (port 5001, same LLM)
-# AppWorld supports --port override; or run in separate virtualenvs
+```python
+# Automatic multi-instance via run.py:
+python3 benchmarks/appworld/run.py --dataset test_normal --num-instances 4
 ```
 
 | Instances | RAM | Env Cores | Expected Throughput |

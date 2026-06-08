@@ -18,14 +18,14 @@ jobs:
       - run: pip install ruff
       - run: |
           ruff check \
-            common/ src/ \
+            common/ \
             misc/ \
+            benchmarks/ \
             scripts/setup.py \
-            scripts/setup/ \
             scripts/inference/ \
             scripts/prefetch_assets.py \
             setup/ \
-            --ignore E501
+            --ignore E501,E402
 
   import-smoke:
     name: Import Smoke Test
@@ -55,8 +55,9 @@ jobs:
           import ast, pathlib
           for f in pathlib.Path('misc').glob('*.py'):
               ast.parse(f.read_text())
-          for f in pathlib.Path('scripts/setup').glob('*.py'):
-              ast.parse(f.read_text())
+          for bench in ['swe-bench','webarena','osworld','appworld','t-bench']:
+              for f in pathlib.Path(f'benchmarks/{bench}').glob('*.py'):
+                  ast.parse(f.read_text())
           for f in pathlib.Path('scripts/inference').glob('*.py'):
               ast.parse(f.read_text())
           for f in pathlib.Path('setup').glob('*.py'):

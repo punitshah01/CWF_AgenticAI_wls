@@ -22,22 +22,27 @@
 
 ## CWF Setup
 
-```bash
-bash scripts/setup/setup_osworld.sh
+```python
+python3 benchmarks/osworld/setup.py
+# options:
+python3 benchmarks/osworld/setup.py --dry-run
+python3 benchmarks/osworld/setup.py --skip-kvm
+python3 benchmarks/osworld/setup.py --registry localhost:5000   # offline
 ```
 
 What it does:
 1. Verifies KVM support (`/proc/cpuinfo` vmx flags)
 2. Checks nested virtualization status
-3. Clones OSWorld, installs Python deps
-4. Runs `quickstart.py` validation
+3. Installs KVM + QEMU + libvirt packages
+4. Clones OSWorld, installs Python deps
+5. Runs `quickstart.py` validation
 
 ### Verify KVM first
-```bash
-egrep -c '(vmx|svm)' /proc/cpuinfo   # must be > 0
+```python
+# Check KVM flags (must return > 0)
+python3 -c "print(open('/proc/cpuinfo').read().count('vmx'))"
 # Enable nested virt if needed:
-sudo modprobe -r kvm_intel
-sudo modprobe kvm_intel nested=1
+# sudo modprobe -r kvm_intel && sudo modprobe kvm_intel nested=1
 ```
 
 ---
@@ -46,21 +51,33 @@ sudo modprobe kvm_intel nested=1
 
 ### 1. Start multimodal LLM server
 OSWorld requires screenshot understanding — use a vision-capable model:
-```bash
+```python
 # Screenshot observation requires a multimodal model
 # For accessibility_tree observation, standard LLM is sufficient
-bash scripts/inference/start_vllm.sh --model 32b --cores 96
+python3 scripts/inference/start_vllm.py --model 32b --cores 96
 ```
 
-### 2. Quickstart validation (1 env, 1 task)
-```bash
+### 2. Quickstart validation
+```python
 cd ~/cwf_agentic/osworld
 conda activate agentic
 python quickstart.py --provider_name docker
 ```
 
-### 3. Production run (parallel VMs)
-```bash
+### 3. Production run — integrated runner:
+```python
+# Full run (369 tasks, 4 parallel VMs)
+python3 benchmarks/osworld/run.py --model 32b --inference-cores 96 --num-envs 4
+
+# Screenshot mode
+python3 benchmarks/osworld/run.py --obs-type screenshot --num-envs 8
+
+# Dry-run
+python3 benchmarks/osworld/run.py --dry-run
+```
+
+Or manual:
+```python
 python scripts/python/run_multienv.py \
     --provider_name docker \
     --headless \
@@ -73,7 +90,7 @@ python scripts/python/run_multienv.py \
 ```
 
 ### 4. Show results
-```bash
+```python
 python show_result.py --detailed
 ```
 

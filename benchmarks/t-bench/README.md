@@ -33,14 +33,15 @@
 
 ## CWF Setup
 
-```bash
-bash scripts/setup/setup_tbench.sh
+```python
+python3 benchmarks/t-bench/setup.py
+# options:
+python3 benchmarks/t-bench/setup.py --dry-run
 ```
 
 What it does:
-1. Attempts `pip install t-bench`
-2. If unavailable, creates a minimal mock REST server (`mock_server.py`) and evaluation harness (`run_eval.py`) under `~/cwf_agentic/tbench/`
-3. Installs `fastapi`, `uvicorn`, `requests`, `jsonschema`
+1. Installs T-Bench Python packages (fastapi, uvicorn, requests, jsonschema, pytest)
+2. Creates mock REST server (`~/cwf_agentic/tbench/mock_server.py`) on first run
 
 ---
 
@@ -48,8 +49,20 @@ What it does:
 
 ### 1. Start LLM server
 T-Bench is very fast — 8B model is sufficient:
-```bash
-bash scripts/inference/start_llamacpp.sh --model 8b --cores 64
+```python
+python3 scripts/inference/start_llamacpp.py --model 8b --cores 64
+```
+
+### 2. Run — integrated runner:
+```python
+# Full evaluation (all categories)
+python3 benchmarks/t-bench/run.py --model 8b --inference-cores 64
+
+# Specific categories
+python3 benchmarks/t-bench/run.py --categories tool_selection param_extraction
+
+# Dry-run
+python3 benchmarks/t-bench/run.py --dry-run
 ```
 
 ### 2. Start mock API server

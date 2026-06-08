@@ -34,13 +34,16 @@
 
 ## CWF Setup
 
-```bash
-bash scripts/setup/setup_webarena.sh
+```python
+python3 benchmarks/webarena/setup.py
+# options:
+python3 benchmarks/webarena/setup.py --dry-run
+python3 benchmarks/webarena/setup.py --registry localhost:5000   # offline
 ```
 
 What it does:
 1. Clones WebArena repo, installs Python deps, installs Playwright
-2. Prints Docker service startup instructions
+2. Pulls 6 Docker service images (from registry if `--registry` set)
 3. Writes `~/.cwf_webarena_env` with endpoint variables
 
 ---
@@ -55,21 +58,32 @@ source ~/.cwf_webarena_env
 ```
 
 ### 2. Start LLM server
-```bash
-bash scripts/inference/start_llamacpp.sh --model 32b --cores 96
+```python
+python3 scripts/inference/start_llamacpp.py --model 32b --cores 96
 ```
 
 ### 3. Setup test data + cookies
-```bash
+```python
 cd ~/cwf_agentic/webarena
-source ~/.cwf_webarena_env
 python scripts/generate_test_data.py
 mkdir -p ./.auth
 python browser_env/auto_login.py
 ```
 
-### 4. Run evaluation
-```bash
+### 4. Run evaluation — integrated runner:
+```python
+# Full run (812 tasks)
+python3 benchmarks/webarena/run.py --model 32b --inference-cores 96
+
+# Smoke test (10 tasks)
+python3 benchmarks/webarena/run.py --start-idx 0 --end-idx 10
+
+# Dry-run (see config)
+python3 benchmarks/webarena/run.py --dry-run
+```
+
+Or manual:
+```python
 python run.py \
     --instruction_path agent/prompts/jsons/p_cot_id_actree_2s.json \
     --test_start_idx 0 \
@@ -85,13 +99,10 @@ python run.py --test_start_idx 0 --test_end_idx 10 --model local_llm --result_di
 
 ## CWF Core Partitioning
 
-```bash
-# Pin Playwright browser workers to env cores only
-taskset -c 64-143 python run.py ...
-```
+`run.py` pins Playwright workers to env cores automatically via `--env-cores`.
 
-Web services should be started with `--cpus` Docker flag pointing to env cores:
-```bash
+Web services started with `--cpus` Docker flag pointing to env cores:
+```
 docker run --cpuset-cpus="64-127" webarena/shopping ...
 ```
 

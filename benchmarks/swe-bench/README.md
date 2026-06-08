@@ -21,8 +21,12 @@
 
 ## CWF Setup
 
-```bash
-bash scripts/setup/setup_swebench.sh
+```python
+python3 benchmarks/swe-bench/setup.py
+# options:
+python3 benchmarks/swe-bench/setup.py --dry-run
+python3 benchmarks/swe-bench/setup.py --registry localhost:5000   # offline
+python3 benchmarks/swe-bench/setup.py --skip-post-install
 ```
 
 What it does:
@@ -35,15 +39,15 @@ What it does:
 ## Run
 
 ### 1. Start LLM server
-```bash
-bash scripts/inference/start_llamacpp.sh --model 32b --cores 96
+```python
+python3 scripts/inference/start_llamacpp.py --model 32b --cores 96
 # or
-bash scripts/inference/start_vllm.sh --model 32b --cores 96
+python3 scripts/inference/start_vllm.py --model 32b --cores 96
 ```
 
-### 2. Generate agent predictions
+### 2. Generate agent predictions  (or use run.py below)
 Using SWE-agent (recommended):
-```bash
+```python
 conda activate agentic
 cd ~/cwf_agentic/swebench
 python -m sweagent.run.run_batch \
@@ -56,8 +60,16 @@ python -m sweagent.run.run_batch \
     --instances.split test
 ```
 
-### 3. Evaluate
-```bash
+### 3. Evaluate — or use the integrated runner:
+```python
+# Integrated: setup + run + telemetry in one command
+python3 benchmarks/swe-bench/run.py --model 32b --inference-cores 96
+python3 benchmarks/swe-bench/run.py --split lite --max-workers 8 --collect-rapl
+python3 benchmarks/swe-bench/run.py --dry-run   # preview config
+```
+
+Manual evaluate only:
+```python
 python -m swebench.harness.run_evaluation \
     --dataset_name princeton-nlp/SWE-bench_Lite \
     --predictions_path <path_to_predictions.jsonl> \
@@ -72,7 +84,7 @@ python -m swebench.harness.run_evaluation \
 - `max_workers` = number of parallel Docker containers
 - Each container uses ~4–8 GB RAM and ~4 cores burst
 - **CWF BKM:** `max_workers = min(int(0.75 * nproc), 24)`
-- Pin containers to env cores: set `DOCKER_CPUSET="64-143"` and use `--cpuset-cpus` in Docker run args
+- Pin containers to env cores: `--env-cores 32` in `run.py` sets taskset automatically
 - Leave cores 0–63 for LLM inference
 
 | max_workers | Parallelism | Notes |
