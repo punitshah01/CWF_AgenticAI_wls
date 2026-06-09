@@ -6,25 +6,28 @@ Starts evaluation against self-hosted Docker web services using a local
 LLM inference server and headless Playwright Chromium.
 
 Usage:
-  python3 benchmarks/webarena/run.py --model 32b --inference-cores 96
-  python3 benchmarks/webarena/run.py --start-idx 0 --end-idx 10   # smoke test
+  python3 benchmarks/webarena/run.py --model 8b                    # smoke test with Ollama
+  python3 benchmarks/webarena/run.py --model 70b --inference-cores 96
+  python3 benchmarks/webarena/run.py --model 8b --collect-emon     # with EMON collection
+  python3 benchmarks/webarena/run.py --start-idx 0 --end-idx 10   # subset
   python3 benchmarks/webarena/run.py --dry-run
 
 Prerequisites:
-  1. Web services running (docker compose up in WebArena repo)
-  2. source ~/.cwf_webarena_env
-  3. LLM server:
-       python3 scripts/inference/start_llamacpp.py --model 32b --cores 96
+  1. Run setup.py first: python3 benchmarks/webarena/setup.py
+  2. Ollama running (auto-started by setup.py) or llama-server on --llm-port
+  3. For EMON: /opt/intel/sep installed + insmod drivers
 
 Arguments:
-  --model            8b | 32b | 70b                          default: 32b
+  --model            8b | 32b | 70b                          default: 8b
   --inference-cores  Cores for LLM                           default: 96
   --env-cores        Cores for Playwright + services         default: 48
   --start-idx        First task index                        default: 0
   --end-idx          Last task index (exclusive)             default: 812
-  --llm-port         API port                                default: 8000
+  --llm-port         API port (11434=Ollama, 8000=llama.cpp) default: 11434
   --run-id           Unique label                            default: auto
-  --collect-emon     Enable EMON
+  --collect-emon     Enable EMON collection (needs SEP)
+  --collect-rapl     Enable RAPL power monitoring (default: on)
+  --collect-temp     Enable temperature monitoring
   --dry-run          Print config, do not run
 """
 
@@ -60,14 +63,17 @@ def parse_args() -> argparse.Namespace:
         description="WebArena evaluation runner for CWF",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--model",           default="32b")
+    p.add_argument("--model",           default="8b",
+                    help="Model shortcut: 8b | 32b | 70b (maps to llama3:<size>)")
     p.add_argument("--inference-cores", type=int, default=96)
     p.add_argument("--env-cores",       type=int, default=48)
     p.add_argument("--start-idx",       type=int, default=0)
     p.add_argument("--end-idx",         type=int, default=812)
-    p.add_argument("--llm-port",        type=int, default=8000)
+    p.add_argument("--llm-port",        type=int, default=11434,
+                    help="LLM API port (11434=Ollama, 8000=llama.cpp)")
     p.add_argument("--run-id",          default="")
-    p.add_argument("--collect-emon",    action="store_true")
+    p.add_argument("--collect-emon",    action="store_true",
+                    help="Enable EMON collection (requires /opt/intel/sep)")
     p.add_argument("--collect-rapl",    action="store_true", default=True)
     p.add_argument("--collect-temp",    action="store_true")
     p.add_argument("--dry-run",         action="store_true")
@@ -89,11 +95,28 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
 
     base_url = f"http://localhost:{args.llm_port}/v1"
 
-    # Source endpoint env if available
+    # Source endpoint env vars from the setup-generated file
     env = os.environ.copy()
     env_file = Path.home() / ".cwf_webarena_env"
-    if not env_file.exists():
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("export ") and "=" in line:
+                kv = line[len("export "):]
+                key, _, val = kv.partition("=")
+                env[key] = val.strip('"')
+    else:
         print(f"[WARN] {env_file} not found. Run setup.py first.", file=sys.stderr)
+
+    # Set OpenAI env vars for the legacy openai==0.27.0 SDK used by WebArena
+    # (WebArena's run.py does NOT accept --openai_api_base as a CLI arg)
+    env["OPENAI_API_KEY"] = env.get("OPENAI_API_KEY", "dummy")
+    env["OPENAI_API_BASE"] = base_url
+
+    # Resolve model name for Ollama (e.g. "8b" → "llama3:8b")
+    model_name = args.model
+    if model_name in ("8b", "32b", "70b"):
+        model_name = f"llama3:{model_name}"
 
     eval_cmd = [
         sys.executable, str(WORKDIR / "run.py"),
@@ -101,9 +124,11 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
         str(WORKDIR / "agent" / "prompts" / "jsons" / "p_cot_id_actree_2s.json"),
         f"--test_start_idx={args.start_idx}",
         f"--test_end_idx={args.end_idx}",
-        "--model", "local_llm",
+        "--provider", "openai",
+        "--model", model_name,
+        "--temperature", "0.1",
+        "--max_tokens", "512",
         f"--result_dir={results_dir}",
-        f"--openai_api_base={base_url}",
     ]
 
     n_tasks = args.end_idx - args.start_idx

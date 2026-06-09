@@ -86,42 +86,54 @@ docker_images:
       size_gb: 2.8
       required: false
 
-  # ── WebArena — 6 self-hosted service containers ──────────────────────────
+  # ── WebArena — Self-hosted service containers ─────────────────────────────
+  # NOTE: WebArena images are NOT on Docker Hub. They are tarballs hosted at
+  # CMU and must be downloaded via wget + loaded with `docker load --input`.
+  # The setup.py script handles this automatically.
+  # Image names after load: shopping_final_0712, shopping_admin_final_0719,
+  #   postmill-populated-exposed-withimg, gitlab-populated-final-port8023
+  # Wikipedia is a .zim file mounted into a ghcr.io/kiwix/kiwix-serve container.
   webarena:
-    - source: "webarena/shopping"
-      tag: "latest"
+    - source: "http://metis.lti.cs.cmu.edu/webarena-images/shopping_final_0712.tar"
+      type: "tarball"
+      image_name: "shopping_final_0712"
       description: "WebArena: Magento e-commerce site (OneStopShop)"
       size_gb: 8.0
       required: true
 
-    - source: "webarena/shopping_admin"
-      tag: "latest"
+    - source: "http://metis.lti.cs.cmu.edu/webarena-images/shopping_admin_final_0719.tar"
+      type: "tarball"
+      image_name: "shopping_admin_final_0719"
       description: "WebArena: Magento admin console"
       size_gb: 8.0
       required: true
 
-    - source: "webarena/forum"
-      tag: "latest"
+    - source: "http://metis.lti.cs.cmu.edu/webarena-images/postmill-populated-exposed-withimg.tar"
+      type: "tarball"
+      image_name: "postmill-populated-exposed-withimg"
       description: "WebArena: Postmill Reddit-like forum"
       size_gb: 2.5
       required: true
 
-    - source: "webarena/gitlab"
-      tag: "latest"
-      description: "WebArena: GitLab CE instance"
+    - source: "http://metis.lti.cs.cmu.edu/webarena-images/gitlab-populated-final-port8023.tar"
+      type: "tarball"
+      image_name: "gitlab-populated-final-port8023"
+      description: "WebArena: GitLab CE instance (OPTIONAL — IOError on RHEL9)"
       size_gb: 3.0
-      required: true
+      required: false    # GitLab often crashes on overlay2 + RHEL9 kernels
 
-    - source: "webarena/wikipedia"
-      tag: "latest"
-      description: "WebArena: Wikipedia snapshot (Kiwix)"
+    - source: "http://metis.lti.cs.cmu.edu/webarena-images/wikipedia_en_all_maxi_2022-05.zim"
+      type: "file"
+      image_name: "ghcr.io/kiwix/kiwix-serve:3.3.0"
+      description: "WebArena: Wikipedia snapshot (.zim mounted into kiwix container)"
       size_gb: 8.0
       required: true
 
-    - source: "webarena/map"
-      tag: "latest"
-      description: "WebArena: OpenStreetMap / OSRM routing"
-      size_gb: 4.5
+    - source: "ghcr.io/kiwix/kiwix-serve"
+      type: "docker_pull"
+      tag: "3.3.0"
+      description: "Kiwix serve container (pulls from ghcr.io, hosts wikipedia .zim)"
+      size_gb: 0.05
       required: true
 
   # ── OSWorld — VM controller (QEMU managed via Docker) ────────────────────

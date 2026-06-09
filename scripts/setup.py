@@ -531,8 +531,28 @@ def install_system_base(os_info: Dict[str, str], dry_run: bool) -> None:
 def install_docker(os_info: Dict[str, str], dry_run: bool) -> None:
     banner("Step 2: Docker CE")
 
+    # CRITICAL: Load iptables kernel modules BEFORE starting Docker (RHEL9 requirement)
+    # Without these, Docker cannot create NAT rules and containers get no port bindings.
+    if os_info["family"] == "centos":
+        log("Loading iptables kernel modules (RHEL9 Docker NAT requirement)...", "info")
+        for mod in ("ip_tables", "iptable_nat", "iptable_filter", "ip_conntrack"):
+            run(f"modprobe {mod}", dry_run=dry_run, check=False)
+        # Persist across reboots
+        modules_conf = "/etc/modules-load.d/docker-nat.conf"
+        if not dry_run:
+            try:
+                Path(modules_conf).write_text(
+                    "ip_tables\niptable_nat\niptable_filter\nip_conntrack\n"
+                )
+            except PermissionError:
+                run(f"echo 'ip_tables\niptable_nat\niptable_filter\nip_conntrack' "
+                    f"| sudo tee {modules_conf}", dry_run=dry_run, check=False)
+        log(f"iptables modules loaded and persisted to {modules_conf}", "ok")
+
     if shutil.which("docker") and not dry_run:
         log("Docker already installed, skipping.", "ok")
+        # Still configure proxy if needed
+        _configure_docker_proxy(dry_run)
         return
 
     family = os_info["family"]
@@ -570,7 +590,36 @@ sudo dnf install -y docker-ce docker-ce-cli containerd.io \
     run(f"sudo usermod -aG docker {os.environ.get('USER', 'root')} || true",
         dry_run=dry_run, check=False)
     run("docker run --rm hello-world", dry_run=dry_run, check=False)
+    _configure_docker_proxy(dry_run)
     log("Docker installed and running", "ok")
+
+
+def _configure_docker_proxy(dry_run: bool) -> None:
+    """Configure Docker daemon proxy for Intel network (if proxy env vars are set)."""
+    http_proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy", "")
+    https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy", "")
+    no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy", "")
+
+    if not http_proxy and not https_proxy:
+        return
+
+    proxy_dir = Path("/etc/systemd/system/docker.service.d")
+    if not dry_run:
+        try:
+            proxy_dir.mkdir(parents=True, exist_ok=True)
+            lines = ["[Service]"]
+            if http_proxy:
+                lines.append(f'Environment="HTTP_PROXY={http_proxy}"')
+            if https_proxy:
+                lines.append(f'Environment="HTTPS_PROXY={https_proxy}"')
+            if no_proxy:
+                lines.append(f'Environment="NO_PROXY={no_proxy}"')
+            (proxy_dir / "proxy.conf").write_text("\n".join(lines) + "\n")
+        except PermissionError:
+            pass
+    run("sudo systemctl daemon-reload", dry_run=dry_run, check=False)
+    run("sudo systemctl restart docker", dry_run=dry_run, check=False)
+    log("Docker proxy configured for Intel network", "ok")
 
 
 def install_kvm(os_info: Dict[str, str], dry_run: bool) -> None:
@@ -677,12 +726,24 @@ def setup_git_lfs(dry_run: bool) -> None:
 # ── Step 4: Playwright browser (SWE-bench, WebArena, OSWorld)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def setup_playwright(conda_env: str, dry_run: bool) -> None:
+def setup_playwright(conda_env: str, os_info: Dict[str, str], dry_run: bool) -> None:
     banner("Step 6: Playwright Chromium")
+    # On CentOS/RHEL, playwright install-deps calls apt-get which doesn't exist.
+    # System libs must be installed manually via dnf BEFORE playwright install.
+    if os_info.get("family") == "centos":
+        centos_pkgs = BENCH_SYSTEM_PKGS.get("webarena", {}).get("centos", "")
+        if centos_pkgs:
+            log("Installing Playwright Chromium deps via dnf (RHEL workaround)...", "info")
+            run(f"sudo dnf install -y {centos_pkgs}", dry_run=dry_run, check=False)
+            # Also install extra libs commonly missing
+            run("sudo dnf install -y libxshmfence mesa-libEGL mesa-libGL libX11-xcb",
+                dry_run=dry_run, check=False)
     run(f"conda run -n {conda_env} playwright install chromium",
         dry_run=dry_run, check=False)
-    run(f"conda run -n {conda_env} playwright install-deps chromium",
-        dry_run=dry_run, check=False)
+    # Only run install-deps on Ubuntu (it uses apt-get internally)
+    if os_info.get("family") != "centos":
+        run(f"conda run -n {conda_env} playwright install-deps chromium",
+            dry_run=dry_run, check=False)
     log("Playwright Chromium installed", "ok")
 
 
@@ -1002,7 +1063,7 @@ def main() -> None:
 
     # ── Playwright (needed by webarena and osworld)
     if any(b in args.benchmarks for b in ("webarena", "osworld", "swebench")):
-        setup_playwright(args.conda_env, args.dry_run)
+        setup_playwright(args.conda_env, os_info, args.dry_run)
 
     # ── Pre-pull Docker images from registry (offline-safe)
     if not args.skip_image_pull:

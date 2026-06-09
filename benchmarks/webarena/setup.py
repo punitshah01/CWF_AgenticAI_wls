@@ -1,61 +1,748 @@
 #!/usr/bin/env python3
 """
-benchmarks/webarena/setup.py — Install WebArena dependencies on CWF.
+benchmarks/webarena/setup.py — Fully Automated WebArena Setup for CWF.
 
-What this does:
-  1. Installs Docker CE (6 self-hosted service containers)
-  2. Installs Playwright system libs + Chromium browser
-  3. Creates / reuses conda env 'agentic' (Python 3.10+)
-  4. Installs all WebArena Python packages
-  5. Writes ~/.cwf_webarena_env with service endpoint variables
+This is the ONE script a manager needs to run. It handles EVERYTHING:
+  1. System dependencies (Docker, iptables modules, Playwright libs)
+  2. Python environment + packages (venv)
+  3. Docker image download (tarballs) + load
+  4. Container startup with correct port mappings
+  5. Magento/GitLab/Wikipedia/Forum URL configuration
+  6. Homepage Flask app
+  7. Ollama LLM server installation + model pull
+  8. WebArena repo clone + test data generation + auto-login cookies
+  9. Validation (all services return 200)
+
+GitLab is OPTIONAL and disabled by default (known IOError crash on RHEL9 overlay2).
 
 Usage:
-  python3 benchmarks/webarena/setup.py
-  python3 benchmarks/webarena/setup.py --dry-run
-  python3 benchmarks/webarena/setup.py --registry localhost:5000
+  python3 benchmarks/webarena/setup.py                    # full setup (no GitLab)
+  python3 benchmarks/webarena/setup.py --host 10.45.154.35
+  python3 benchmarks/webarena/setup.py --include-gitlab   # try GitLab (may fail)
+  python3 benchmarks/webarena/setup.py --skip-docker      # if Docker already running
+  python3 benchmarks/webarena/setup.py --skip-ollama      # if using external LLM
+  python3 benchmarks/webarena/setup.py --model llama3:70b # Ollama model (default: 8b)
+  python3 benchmarks/webarena/setup.py --dry-run          # print commands only
+  python3 benchmarks/webarena/setup.py --images-dir /path # where .tar files are
+
+Platform: CWF (Clearwater Forest) — CentOS/RHEL 9, no GPU, E-core Darkmont.
 """
 
+import argparse
+import json
+import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 if sys.version_info < (3, 10):
     sys.exit(f"[ERROR] Python 3.10+ required. Current: {sys.version.split()[0]}")
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(REPO_ROOT))
+
+# WebArena Docker image tarballs — download from CMU mirrors
+WEBARENA_IMAGE_URLS = {
+    "shopping": "http://metis.lti.cs.cmu.edu/webarena-images/shopping_final_0712.tar",
+    "shopping_admin": "http://metis.lti.cs.cmu.edu/webarena-images/shopping_admin_final_0719.tar",
+    "forum": "http://metis.lti.cs.cmu.edu/webarena-images/postmill-populated-exposed-withimg.tar",
+    "gitlab": "http://metis.lti.cs.cmu.edu/webarena-images/gitlab-populated-final-port8023.tar",
+    "wikipedia": "http://metis.lti.cs.cmu.edu/webarena-images/wikipedia_en_all_maxi_2022-05.zim",
+}
+
+WEBARENA_IMAGE_NAMES = {
+    "shopping": "shopping_final_0712",
+    "shopping_admin": "shopping_admin_final_0719",
+    "forum": "postmill-populated-exposed-withimg",
+    "gitlab": "gitlab-populated-final-port8023",
+}
+
+WEBARENA_PORTS = {
+    "shopping": 7770,
+    "shopping_admin": 7780,
+    "forum": 9999,
+    "gitlab": 8023,
+    "wikipedia": 8888,
+    "homepage": 4399,
+}
+
+# CentOS/RHEL packages for Playwright Chromium (playwright install-deps uses apt — fails on RHEL)
+PLAYWRIGHT_CENTOS_PKGS = (
+    "glib2 nss nspr atk at-spi2-atk cups-libs libdrm dbus-libs "
+    "libxcb libxkbcommon libX11 libXcomposite libXdamage libXext "
+    "libXfixes libXrandr mesa-libgbm pango cairo alsa-lib "
+    "libxshmfence mesa-libEGL mesa-libGL libX11-xcb"
+)
+
+# iptables kernel modules required for Docker NAT on RHEL9
+IPTABLES_MODULES = ["ip_tables", "iptable_nat", "iptable_filter", "ip_conntrack"]
+
+WORKDIR = Path.home() / "cwf_agentic" / "webarena"
+IMAGES_DIR_DEFAULT = Path.home() / "webarena_images"
 
 
-def _write_env_file() -> None:
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
+class Color:
+    BLUE = "\033[94m"; GREEN = "\033[92m"; YELLOW = "\033[93m"
+    RED = "\033[91m"; BOLD = "\033[1m"; RESET = "\033[0m"
+
+
+def log(msg: str, level: str = "info") -> None:
+    colors = {"info": Color.BLUE, "ok": Color.GREEN, "warn": Color.YELLOW, "error": Color.RED}
+    prefix = {"info": "[INFO]", "ok": "[ OK ]", "warn": "[WARN]", "error": "[ERR ]"}
+    c = colors.get(level, "")
+    p = prefix.get(level, "[    ]")
+    print(f"{c}{Color.BOLD}{p}{Color.RESET}{c} {msg}{Color.RESET}", flush=True)
+
+
+def banner(title: str) -> None:
+    print(f"\n{Color.BOLD}{Color.BLUE}{'='*60}{Color.RESET}")
+    print(f"{Color.BOLD}{Color.BLUE}  {title}{Color.RESET}")
+    print(f"{Color.BOLD}{Color.BLUE}{'='*60}{Color.RESET}\n")
+
+
+def run(cmd: str, dry_run: bool = False, check: bool = False,
+        timeout: int = 600) -> subprocess.CompletedProcess:
+    """Run a shell command."""
+    print(f"  $ {cmd}", flush=True)
+    if dry_run:
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    try:
+        result = subprocess.run(cmd, shell=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log(f"Command timed out after {timeout}s: {cmd}", "warn")
+        return subprocess.CompletedProcess(cmd, 1, "", "timeout")
+    if check and result.returncode != 0:
+        log(f"Command failed (exit {result.returncode}): {cmd}", "error")
+    return result
+
+
+def run_capture(cmd: str, dry_run: bool = False) -> str:
+    """Run command, return stdout."""
+    if dry_run:
+        return ""
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def get_host_ip() -> str:
+    """Auto-detect host IP from first non-loopback interface."""
+    try:
+        out = subprocess.run(
+            "hostname -I | awk '{print $1}'",
+            shell=True, capture_output=True, text=True
+        ).stdout.strip()
+        if out:
+            return out
+    except Exception:
+        pass
+    return "localhost"
+
+
+def detect_os_family() -> str:
+    """Returns 'centos' or 'ubuntu'."""
+    try:
+        with open("/etc/os-release") as f:
+            text = f.read().lower()
+        for centos_id in ("centos", "rhel", "fedora", "rocky", "almalinux"):
+            if centos_id in text:
+                return "centos"
+        for ubuntu_id in ("ubuntu", "debian"):
+            if ubuntu_id in text:
+                return "ubuntu"
+    except FileNotFoundError:
+        pass
+    if shutil.which("dnf") or shutil.which("yum"):
+        return "centos"
+    return "ubuntu"
+
+
+def get_proxy_env() -> dict:
+    """Get proxy environment variables if set."""
+    proxy_vars = {}
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+                "http_proxy", "https_proxy", "no_proxy"):
+        val = os.environ.get(key)
+        if val:
+            proxy_vars[key] = val
+    return proxy_vars
+
+
+# ── Step 1: Docker + iptables ─────────────────────────────────────────────────
+
+def setup_docker_and_iptables(os_family: str, dry_run: bool) -> None:
+    banner("Step 1: Docker CE + iptables Kernel Modules")
+
+    # Load iptables kernel modules (RHEL9 requires this for Docker NAT)
+    log("Loading iptables kernel modules (required for Docker NAT on RHEL9)...")
+    for mod in IPTABLES_MODULES:
+        run(f"modprobe {mod}", dry_run=dry_run)
+
+    # Persist modules across reboots
+    if not dry_run:
+        Path("/etc/modules-load.d/docker-nat.conf").write_text(
+            "\n".join(IPTABLES_MODULES) + "\n"
+        )
+    log("iptables modules persisted to /etc/modules-load.d/docker-nat.conf", "ok")
+
+    # Install Docker if not present
+    if shutil.which("docker") and not dry_run:
+        log("Docker already installed", "ok")
+    else:
+        if os_family == "centos":
+            run("dnf install -y yum-utils", dry_run=dry_run)
+            run("yum-config-manager --add-repo "
+                "https://download.docker.com/linux/centos/docker-ce.repo",
+                dry_run=dry_run)
+            run("dnf install -y docker-ce docker-ce-cli containerd.io "
+                "docker-buildx-plugin docker-compose-plugin",
+                dry_run=dry_run)
+        else:
+            run("apt-get update -y && apt-get install -y "
+                "docker-ce docker-ce-cli containerd.io "
+                "docker-buildx-plugin docker-compose-plugin",
+                dry_run=dry_run)
+
+    # Configure Docker daemon (data-root on /root to use root partition)
+    if not dry_run:
+        Path("/etc/docker").mkdir(parents=True, exist_ok=True)
+        Path("/etc/docker/daemon.json").write_text(json.dumps({
+            "data-root": "/root/docker-data",
+            "storage-driver": "overlay2",
+            "iptables": True,
+        }, indent=2) + "\n")
+
+    # Configure Docker proxy (Intel network)
+    proxy_env = get_proxy_env()
+    if proxy_env:
+        docker_proxy_dir = Path("/etc/systemd/system/docker.service.d")
+        if not dry_run:
+            docker_proxy_dir.mkdir(parents=True, exist_ok=True)
+            lines = ["[Service]"]
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+                val = proxy_env.get(key) or proxy_env.get(key.lower())
+                if val:
+                    lines.append(f'Environment="{key}={val}"')
+            (docker_proxy_dir / "proxy.conf").write_text("\n".join(lines) + "\n")
+        log("Docker proxy configured for Intel network", "ok")
+
+    run("systemctl daemon-reload", dry_run=dry_run)
+    run("systemctl enable --now docker", dry_run=dry_run)
+    log("Docker ready", "ok")
+
+
+# ── Step 2: Playwright System Dependencies ────────────────────────────────────
+
+def setup_playwright_deps(os_family: str, dry_run: bool) -> None:
+    banner("Step 2: Playwright Chromium System Dependencies")
+
+    if os_family == "centos":
+        # playwright install-deps uses apt-get internally — fails on RHEL.
+        # Install the libs manually via dnf.
+        run(f"dnf install -y {PLAYWRIGHT_CENTOS_PKGS}", dry_run=dry_run)
+        log("Playwright deps installed via dnf (RHEL workaround)", "ok")
+    else:
+        run("apt-get install -y "
+            "libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 "
+            "libcups2 libdrm2 libdbus-1-3 libxcb1 libxkbcommon0 "
+            "libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 "
+            "libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2",
+            dry_run=dry_run)
+        log("Playwright deps installed via apt", "ok")
+
+
+# ── Step 3: Python Environment ────────────────────────────────────────────────
+
+def setup_python_env(dry_run: bool) -> str:
+    """Create venv and install WebArena deps. Returns venv path string."""
+    banner("Step 3: Python Virtual Environment + WebArena Packages")
+
+    venv_path = Path.home() / "webarena_venv"
+
+    # Find Python 3.10+
+    python_bin = None
+    for candidate in ("python3.11", "python3.10", "python3"):
+        if shutil.which(candidate):
+            # Verify version
+            ver = run_capture(f"{candidate} --version")
+            if "3.10" in ver or "3.11" in ver or "3.12" in ver:
+                python_bin = candidate
+                break
+
+    if python_bin is None:
+        log("No Python 3.10+ found. Installing python3.11...", "info")
+        run("dnf install -y python3.11 python3.11-devel 2>/dev/null || "
+            "apt-get install -y python3.11 python3.11-dev",
+            dry_run=dry_run)
+        python_bin = "python3.11"
+
+    if not venv_path.exists() or dry_run:
+        run(f"{python_bin} -m venv {venv_path}", dry_run=dry_run)
+
+    pip = str(venv_path / "bin" / "pip")
+
+    run(f"{pip} install --upgrade pip setuptools wheel", dry_run=dry_run)
+    run(f"{pip} install gymnasium 'playwright==1.32.1' Pillow evaluate "
+        f"'openai==0.27.0' types-tqdm tiktoken aiolimiter 'beartype==0.12.0' "
+        f"flask nltk text-generation 'transformers>=4.33.2,<4.40'",
+        dry_run=dry_run)
+
+    # Install playwright browser (skip install-deps on RHEL — done in Step 2)
+    run(f"{venv_path}/bin/playwright install", dry_run=dry_run)
+
+    log(f"Python venv ready at {venv_path}", "ok")
+    return str(venv_path)
+
+
+# ── Step 4: Clone WebArena Repo ───────────────────────────────────────────────
+
+def clone_webarena(venv_path: str, dry_run: bool) -> Path:
+    banner("Step 4: Clone WebArena Repository + Patch for Local Models")
+
+    if WORKDIR.exists() and (WORKDIR / "run.py").exists():
+        log(f"WebArena already cloned at {WORKDIR}", "ok")
+    else:
+        WORKDIR.parent.mkdir(parents=True, exist_ok=True)
+        run(f"git clone https://github.com/web-arena-x/webarena.git {WORKDIR}",
+            dry_run=dry_run)
+
+    # Install in editable mode
+    venv_pip = str(Path(venv_path) / "bin" / "pip")
+    run(f"{venv_pip} install -e {WORKDIR}", dry_run=dry_run)
+
+    # Patch tokenizer to handle non-OpenAI model names (Ollama/local models)
+    tokenizer_file = WORKDIR / "llms" / "tokenizers.py"
+    if tokenizer_file.exists() and not dry_run:
+        content = tokenizer_file.read_text()
+        old = "            self.tokenizer = tiktoken.encoding_for_model(model_name)"
+        new = (
+            "            try:\n"
+            "                self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
+            "            except KeyError:\n"
+            '                self.tokenizer = tiktoken.get_encoding("cl100k_base")'
+        )
+        if old in content:
+            content = content.replace(old, new)
+            tokenizer_file.write_text(content)
+            log("Patched tokenizers.py for local model compatibility", "ok")
+        else:
+            log("tokenizers.py already patched or different format", "ok")
+
+    log(f"WebArena repo ready at {WORKDIR}", "ok")
+    return WORKDIR
+
+
+# ── Step 5: Download + Load Docker Images ─────────────────────────────────────
+
+def download_and_load_images(images_dir: Path, include_gitlab: bool,
+                             dry_run: bool) -> None:
+    banner("Step 5: Download + Load WebArena Docker Images")
+
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    services = ["shopping", "shopping_admin", "forum", "wikipedia"]
+    if include_gitlab:
+        services.append("gitlab")
+
+    for svc in services:
+        url = WEBARENA_IMAGE_URLS[svc]
+        filename = url.split("/")[-1]
+        filepath = images_dir / filename
+
+        # Download if not already present
+        if not filepath.exists() or dry_run:
+            log(f"Downloading {svc}: {filename} ...", "info")
+            run(f"wget -c -q --show-progress '{url}' -O {filepath}",
+                dry_run=dry_run, timeout=7200)
+        else:
+            log(f"{svc}: {filename} already exists, skipping download", "ok")
+
+        # Load Docker images (not for .zim files)
+        if svc != "wikipedia":
+            image_name = WEBARENA_IMAGE_NAMES[svc]
+            # Check if already loaded
+            check = run_capture(f"docker images -q {image_name}", dry_run=dry_run)
+            if check:
+                log(f"{svc}: image {image_name} already loaded", "ok")
+            else:
+                log(f"Loading {svc} into Docker...", "info")
+                run(f"docker load --input {filepath}", dry_run=dry_run, timeout=600)
+
+    log("All Docker images ready", "ok")
+
+
+# ── Step 6: Start Containers + Configure URLs ─────────────────────────────────
+
+def start_and_configure_services(host: str, images_dir: Path,
+                                  include_gitlab: bool, dry_run: bool) -> None:
+    banner("Step 6: Start Containers + Configure Service URLs")
+
+    # Stop/remove any existing containers
+    for name in ["shopping", "shopping_admin", "forum", "gitlab", "wikipedia"]:
+        run(f"docker rm -f {name} 2>/dev/null || true", dry_run=dry_run)
+
+    # ── Start Shopping
+    run("docker run --name shopping -p 7770:80 -d shopping_final_0712",
+        dry_run=dry_run)
+
+    # ── Start Shopping Admin
+    run("docker run --name shopping_admin -p 7780:80 -d shopping_admin_final_0719",
+        dry_run=dry_run)
+
+    # ── Start Forum (Reddit/Postmill)
+    run("docker run --name forum -p 9999:80 -d postmill-populated-exposed-withimg",
+        dry_run=dry_run)
+
+    # ── Start GitLab (optional — known IOError issues on RHEL9)
+    if include_gitlab:
+        log("Starting GitLab (with tmpfs fix for prometheus mmap issue)...", "info")
+        run("docker run --name gitlab -d -p 8023:8023 "
+            "--tmpfs /var/opt/gitlab/gitlab-rails/shared/prometheus_multiproc_dir:exec,size=128M "
+            "--shm-size=512m "
+            "gitlab-populated-final-port8023 "
+            "/opt/gitlab/embedded/bin/runsvdir-start",
+            dry_run=dry_run)
+    else:
+        log("GitLab SKIPPED (use --include-gitlab to enable)", "info")
+
+    # ── Start Wikipedia (kiwix)
+    zim_file = images_dir / "wikipedia_en_all_maxi_2022-05.zim"
+    if zim_file.exists() or dry_run:
+        run(f"docker run -d --name=wikipedia "
+            f"--volume={images_dir}:/data "
+            f"-p 8888:80 "
+            f"ghcr.io/kiwix/kiwix-serve:3.3.0 "
+            f"wikipedia_en_all_maxi_2022-05.zim",
+            dry_run=dry_run)
+    else:
+        log(f"Wikipedia .zim not found at {zim_file} — skipping", "warn")
+
+    # ── Wait for MySQL inside shopping containers to initialize
+    log("Waiting 2 minutes for Shopping/Shopping Admin MySQL to initialize...", "info")
+    if not dry_run:
+        time.sleep(120)
+
+    # ── Configure Shopping base URLs
+    log("Configuring Shopping store URL...", "info")
+    run(f'docker exec shopping /var/www/magento2/bin/magento '
+        f'setup:store-config:set --base-url="http://{host}:7770"',
+        dry_run=dry_run)
+    run(f"docker exec shopping mysql -h 127.0.0.1 -u magentouser -pMyPassword magentodb "
+        f"-e \"UPDATE core_config_data SET value='http://{host}:7770/' "
+        f"WHERE path='web/secure/base_url';\"",
+        dry_run=dry_run)
+    run("docker exec shopping /var/www/magento2/bin/magento cache:flush",
+        dry_run=dry_run)
+
+    # ── Configure Shopping Admin base URLs
+    log("Configuring Shopping Admin store URL...", "info")
+    run(f'docker exec shopping_admin /var/www/magento2/bin/magento '
+        f'setup:store-config:set --base-url="http://{host}:7780"',
+        dry_run=dry_run)
+    run(f"docker exec shopping_admin mysql -h 127.0.0.1 -u magentouser -pMyPassword magentodb "
+        f"-e \"UPDATE core_config_data SET value='http://{host}:7780/' "
+        f"WHERE path='web/secure/base_url';\"",
+        dry_run=dry_run)
+    # Disable forced password reset (required for auto-login)
+    run("docker exec shopping_admin php /var/www/magento2/bin/magento "
+        "config:set admin/security/password_is_forced 0", dry_run=dry_run)
+    run("docker exec shopping_admin php /var/www/magento2/bin/magento "
+        "config:set admin/security/password_lifetime 0", dry_run=dry_run)
+    run("docker exec shopping_admin /var/www/magento2/bin/magento cache:flush",
+        dry_run=dry_run)
+
+    # ── Configure GitLab (if enabled)
+    if include_gitlab:
+        log("Waiting 5 minutes for GitLab to fully boot...", "info")
+        if not dry_run:
+            time.sleep(300)
+        run("docker exec gitlab update-permissions", dry_run=dry_run)
+        run(f'docker exec gitlab sed -i '
+            f"\"s|^external_url.*|external_url 'http://{host}:8023'|\" "
+            f'/etc/gitlab/gitlab.rb', dry_run=dry_run)
+        # Disable prometheus (prevents IOError unmapped file crash)
+        disable_prom = (
+            'docker exec gitlab bash -c "'
+            "echo \\\"prometheus_monitoring['enable'] = false\\\" >> /etc/gitlab/gitlab.rb && "
+            "echo \\\"sidekiq['metrics_enabled'] = false\\\" >> /etc/gitlab/gitlab.rb && "
+            "echo \\\"puma['exporter_enabled'] = false\\\" >> /etc/gitlab/gitlab.rb"
+            '"'
+        )
+        run(disable_prom, dry_run=dry_run)
+        run("docker exec gitlab gitlab-ctl reconfigure", dry_run=dry_run, timeout=600)
+        log("GitLab configured (prometheus disabled)", "ok")
+
+    log("All containers started and configured", "ok")
+
+
+# ── Step 7: Start Homepage Flask App ──────────────────────────────────────────
+
+def start_homepage(host: str, venv_path: str, dry_run: bool) -> None:
+    banner("Step 7: Start Homepage Flask App")
+
+    homepage_dir = WORKDIR / "environment_docker" / "webarena-homepage"
+    template = homepage_dir / "templates" / "index.html"
+
+    if template.exists() and not dry_run:
+        content = template.read_text()
+        content = content.replace("<your-server-hostname>", host)
+        template.write_text(content)
+
+    flask_bin = str(Path(venv_path) / "bin" / "flask")
+    log_file = Path.home() / "webarena_homepage.log"
+
+    # Kill any existing flask on 4399
+    run("pkill -f 'flask.*4399' 2>/dev/null || true", dry_run=dry_run)
+
+    run(f"cd {homepage_dir} && nohup {flask_bin} run --host=0.0.0.0 --port=4399 "
+        f"> {log_file} 2>&1 &", dry_run=dry_run)
+
+    if not dry_run:
+        time.sleep(3)
+    log("Homepage started on port 4399", "ok")
+
+
+# ── Step 8: Ollama LLM Server ─────────────────────────────────────────────────
+
+def setup_ollama(model: str, dry_run: bool) -> None:
+    banner(f"Step 8: Ollama LLM Server (model: {model})")
+
+    # Install Ollama
+    if not shutil.which("ollama") or dry_run:
+        run("curl -fsSL https://ollama.com/install.sh | sh", dry_run=dry_run)
+
+    # Configure Ollama with proxy (required on Intel network for model pull)
+    proxy_env = get_proxy_env()
+    ollama_override_dir = Path("/etc/systemd/system/ollama.service.d")
+    if not dry_run:
+        ollama_override_dir.mkdir(parents=True, exist_ok=True)
+        lines = ["[Service]"]
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+            val = proxy_env.get(key) or proxy_env.get(key.lower())
+            if val:
+                lines.append(f'Environment="{key}={val}"')
+        lines.append('Environment="OLLAMA_HOST=0.0.0.0:11434"')
+        lines.append('Environment="OLLAMA_NUM_PARALLEL=4"')
+        (ollama_override_dir / "override.conf").write_text("\n".join(lines) + "\n")
+
+    run("systemctl daemon-reload", dry_run=dry_run)
+    run("systemctl enable --now ollama", dry_run=dry_run)
+
+    if not dry_run:
+        time.sleep(5)
+
+    # Pull model
+    log(f"Pulling Ollama model: {model} (this may take several minutes)...", "info")
+    run(f"ollama pull {model}", dry_run=dry_run, timeout=7200)
+    log(f"Ollama ready with model: {model}", "ok")
+
+
+# ── Step 9: Generate Test Data + Auto-Login ───────────────────────────────────
+
+def generate_test_data_and_login(host: str, venv_path: str,
+                                  include_gitlab: bool, dry_run: bool) -> None:
+    banner("Step 9: Generate Test Configs + Auto-Login Cookies")
+
+    python = str(Path(venv_path) / "bin" / "python")
+    workdir = str(WORKDIR)
+
+    # Set environment variables for WebArena scripts
+    env = os.environ.copy()
+    env["SHOPPING"] = f"http://{host}:7770"
+    env["SHOPPING_ADMIN"] = f"http://{host}:7780/admin"
+    env["REDDIT"] = f"http://{host}:9999"
+    env["GITLAB"] = f"http://{host}:8023" if include_gitlab else "http://localhost:8023"
+    env["MAP"] = f"http://{host}:3000"
+    env["WIKIPEDIA"] = (
+        f"http://{host}:8888/wikipedia_en_all_maxi_2022-05"
+        f"/A/User:The_other_Kiwix_guy/Landing"
+    )
+    env["HOMEPAGE"] = "PASS"
+
+    # Generate config files (812 tasks)
+    log("Generating task config files...", "info")
+    if not dry_run:
+        subprocess.run(
+            [python, "scripts/generate_test_data.py"],
+            cwd=workdir, env=env
+        )
+        n_configs = len(list((WORKDIR / "config_files").glob("*.json")))
+        log(f"Generated {n_configs} task config files", "ok")
+
+    # Generate auto-login cookies via Playwright
+    log("Generating auto-login cookies (Playwright → .auth/)...", "info")
+    if not dry_run:
+        (WORKDIR / ".auth").mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [python, "browser_env/auto_login.py"],
+            cwd=workdir, env=env
+        )
+        if result.returncode == 0:
+            log("Auto-login cookies generated", "ok")
+        else:
+            log("Auto-login partially failed (GitLab down is expected if skipped)", "warn")
+
+    # Write env file for future use by run.py
     env_file = Path.home() / ".cwf_webarena_env"
-    env_file.write_text("""\
-# WebArena service endpoints — source before running evaluation
-# Adjust HOSTURL if services run on a different host
-export HOSTURL="${HOSTURL:-localhost}"
-export SHOPPING="http://${HOSTURL}:7770"
-export SHOPPING_ADMIN="http://${HOSTURL}:7780/admin"
-export REDDIT="http://${HOSTURL}:9999"
-export GITLAB="http://${HOSTURL}:8023"
-export WIKIPEDIA="http://${HOSTURL}:8888/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing"
-export MAP="http://${HOSTURL}:3000"
-export HOMEPAGE="http://${HOSTURL}:4399"
-""")
-    print(f"[setup_webarena] Service endpoints written to {env_file}")
-    print(f"[setup_webarena] Run: source {env_file}")
+    if not dry_run:
+        env_file.write_text(
+            f'# WebArena — source this file before running evaluation\n'
+            f'export SHOPPING="http://{host}:7770"\n'
+            f'export SHOPPING_ADMIN="http://{host}:7780/admin"\n'
+            f'export REDDIT="http://{host}:9999"\n'
+            f'export GITLAB="http://{host}:8023"\n'
+            f'export MAP="http://{host}:3000"\n'
+            f'export WIKIPEDIA="http://{host}:8888/wikipedia_en_all_maxi_2022-05'
+            f'/A/User:The_other_Kiwix_guy/Landing"\n'
+            f'export HOMEPAGE="PASS"\n'
+            f'export OPENAI_API_KEY="dummy"\n'
+            f'export OPENAI_API_BASE="http://localhost:11434/v1"\n'
+        )
+    log(f"Environment file written to {env_file}", "ok")
+
+
+# ── Step 10: Validation ───────────────────────────────────────────────────────
+
+def validate_services(host: str, include_gitlab: bool, dry_run: bool) -> bool:
+    banner("Step 10: Service Health Check")
+
+    if dry_run:
+        log("[dry-run] Would validate all services", "info")
+        return True
+
+    import urllib.request
+
+    services = [
+        ("Shopping", 7770),
+        ("ShopAdmin", 7780),
+        ("Forum", 9999),
+        ("Wikipedia", 8888),
+        ("Homepage", 4399),
+    ]
+    if include_gitlab:
+        services.append(("GitLab", 8023))
+
+    all_ok = True
+    for name, port in services:
+        try:
+            req = urllib.request.Request(f"http://{host}:{port}", method="GET")
+            resp = urllib.request.urlopen(req, timeout=10)
+            code = resp.getcode()
+        except Exception:
+            code = 0
+
+        status = "ok" if code in (200, 302) else "error"
+        if status == "error":
+            all_ok = False
+        log(f"  {name:12s} ({port}): {code}", status)
+
+    if all_ok:
+        log("All services healthy!", "ok")
+    else:
+        log("Some services are down — check Docker containers", "warn")
+
+    return all_ok
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="WebArena — Fully Automated Setup for CWF Baremetal",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--host", default="",
+                        help="Server IP/hostname. Auto-detected if not set.")
+    parser.add_argument("--include-gitlab", action="store_true", default=False,
+                        help="Include GitLab (often fails on RHEL9 — disabled by default).")
+    parser.add_argument("--skip-docker", action="store_true",
+                        help="Skip Docker installation (if already running).")
+    parser.add_argument("--skip-ollama", action="store_true",
+                        help="Skip Ollama setup (if using external LLM server).")
+    parser.add_argument("--skip-images", action="store_true",
+                        help="Skip image download/load (if already loaded).")
+    parser.add_argument("--skip-containers", action="store_true",
+                        help="Skip container start/config (if already running).")
+    parser.add_argument("--model", default="llama3:8b",
+                        help="Ollama model to pull. E.g. llama3:8b, llama3:70b")
+    parser.add_argument("--images-dir", default=str(IMAGES_DIR_DEFAULT),
+                        help="Directory for Docker image tarballs / .zim file.")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print commands without executing.")
+    return parser.parse_args()
 
 
 def main() -> None:
-    extra = sys.argv[1:]
-    cmd = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "setup.py"),
-        "--benchmarks", "webarena",
-        *extra,
-    ]
-    rc = subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
-    if rc == 0:
-        _write_env_file()
-    sys.exit(rc)
+    args = parse_args()
+
+    host = args.host or get_host_ip()
+    images_dir = Path(args.images_dir)
+    os_family = detect_os_family()
+
+    banner("WebArena — Fully Automated Setup for CWF Baremetal")
+    print(f"  Host IP       : {host}")
+    print(f"  OS Family     : {os_family}")
+    print(f"  Images Dir    : {images_dir}")
+    print(f"  Include GitLab: {args.include_gitlab}")
+    print(f"  LLM Model     : {args.model}")
+    print(f"  Dry Run       : {args.dry_run}")
+    print()
+
+    # Step 1: Docker + iptables
+    if not args.skip_docker:
+        setup_docker_and_iptables(os_family, args.dry_run)
+
+    # Step 2: Playwright system deps
+    setup_playwright_deps(os_family, args.dry_run)
+
+    # Step 3: Python environment
+    venv_path = setup_python_env(args.dry_run)
+
+    # Step 4: Clone WebArena repo + patch
+    clone_webarena(venv_path, args.dry_run)
+
+    # Step 5: Download + load Docker images
+    if not args.skip_images:
+        download_and_load_images(images_dir, args.include_gitlab, args.dry_run)
+
+    # Step 6: Start containers + configure URLs
+    if not args.skip_containers:
+        start_and_configure_services(host, images_dir, args.include_gitlab,
+                                      args.dry_run)
+
+    # Step 7: Start homepage
+    start_homepage(host, venv_path, args.dry_run)
+
+    # Step 8: Ollama LLM
+    if not args.skip_ollama:
+        setup_ollama(args.model, args.dry_run)
+
+    # Step 9: Generate test data + auto-login
+    generate_test_data_and_login(host, venv_path, args.include_gitlab, args.dry_run)
+
+    # Step 10: Validate
+    validate_services(host, args.include_gitlab, args.dry_run)
+
+    # ── Final summary ─────────────────────────────────────────────────────────
+    banner("Setup Complete!")
+    print(f"  To run evaluation:")
+    print(f"    source ~/.cwf_webarena_env")
+    print(f"    source {venv_path}/bin/activate")
+    print(f"    cd {WORKDIR}")
+    print(f"    python run.py \\")
+    print(f"      --instruction_path agent/prompts/jsons/p_cot_id_actree_2s.json \\")
+    print(f"      --test_start_idx 0 --test_end_idx 10 \\")
+    print(f"      --provider openai --model {args.model} \\")
+    print(f"      --temperature 0.1 --max_tokens 512 \\")
+    print(f"      --result_dir results/run_01")
+    print()
+    print(f"  Or use the CWF runner:")
+    print(f"    python3 {REPO_ROOT}/benchmarks/webarena/run.py --model {args.model.split(':')[0]}")
+    print()
 
 
 if __name__ == "__main__":

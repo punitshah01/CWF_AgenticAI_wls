@@ -13,9 +13,12 @@ services:
   shopping: "localhost:7770"
   shopping_admin: "localhost:7780/admin"
   reddit: "localhost:9999"
-  gitlab: "localhost:8023"
+  # GitLab is OPTIONAL — disabled by default due to IOError crash on RHEL9/overlay2.
+  # Enable with: python3 benchmarks/webarena/setup.py --include-gitlab
+  gitlab: "localhost:8023"       # optional — often returns 500 on CWF
+  gitlab_enabled: false          # set to true only if gitlab container is healthy
   wikipedia: "localhost:8888/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing"
-  map: "localhost:3000"
+  map: "localhost:3000"          # requires separate map backend — optional
 
 # Browser / Playwright
 browser:
