@@ -28,6 +28,8 @@ Arguments:
   --collect-emon     Enable EMON collection (needs SEP)
   --collect-rapl     Enable RAPL power monitoring (default: on)
   --collect-temp     Enable temperature monitoring
+  --emon-warmup      Seconds to wait after workload starts before EMON begins default: 60
+  --emon-duration    Seconds to collect EMON data (0 = full run)           default: 120
   --dry-run          Print config, do not run
 """
 
@@ -76,6 +78,10 @@ def parse_args() -> argparse.Namespace:
                     help="Enable EMON collection (requires /opt/intel/sep)")
     p.add_argument("--collect-rapl",    action="store_true", default=True)
     p.add_argument("--collect-temp",    action="store_true")
+    p.add_argument("--emon-warmup",     type=int, default=60,
+                    help="Seconds to wait after workload starts before EMON collection begins (skip cold-start transient)")
+    p.add_argument("--emon-duration",   type=int, default=120,
+                    help="Seconds to collect EMON data; 0 = collect until workload ends")
     p.add_argument("--dry-run",         action="store_true")
     return p.parse_args()
 
@@ -202,16 +208,22 @@ def main() -> None:
     print(f"  Model     : {args.model}  Inf-cores: {args.inference_cores}")
     print(f"  Tasks     : {args.start_idx}..{args.end_idx}")
     print(f"  Output    : {out_dir}")
+    if args.collect_emon:
+        dur_label = f"{args.emon_duration}s" if args.emon_duration > 0 else "full run"
+        print(f"  EMON      : warmup={args.emon_warmup}s  duration={dur_label}")
     print(f"{'='*60}\n")
 
     sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
                                    experiment_name=BENCHMARK)
+    emon_duration = args.emon_duration if args.emon_duration > 0 else None
     tm = TelemetryManager(
         output_dir=str(out_dir / "telemetry"),
         platform=platform,
         collect_emon=args.collect_emon,
         collect_rapl=args.collect_rapl,
         collect_temp=args.collect_temp,
+        emon_warmup_s=args.emon_warmup,
+        emon_duration_s=emon_duration,
     )
     if not args.dry_run:
         tm.start(session_name=run_id)

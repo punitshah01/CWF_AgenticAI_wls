@@ -17,6 +17,8 @@ Usage:
 
 from pathlib import Path
 from typing import Dict, Optional
+import threading
+import time
 
 from .emon  import EmonCollector
 from .rapl  import RaplCollector
@@ -35,12 +37,16 @@ class TelemetryManager:
         collect_rapl: bool = True,
         collect_temp: bool = True,
         rapl_poll_interval_s: float = 5.0,
+        emon_warmup_s: int = 0,
+        emon_duration_s: Optional[int] = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.platform   = platform.lower()
         self.collect_emon = collect_emon
         self.collect_rapl = collect_rapl
         self.collect_temp = collect_temp
+        self.emon_warmup_s   = emon_warmup_s
+        self.emon_duration_s = emon_duration_s
 
         self.emon  = EmonCollector(output_dir=str(self.output_dir))
         self.rapl  = RaplCollector(poll_interval_s=rapl_poll_interval_s)
@@ -61,14 +67,16 @@ class TelemetryManager:
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def start(self, session_name: str = "telemetry") -> None:
-        """Start all configured telemetry collectors."""
-        if self.collect_emon and self.emon.is_available():
-            if self.emon.start_collection(session_name):
-                self._active.append("emon")
-                print("[telemetry] EMON started")
-            else:
-                print("[telemetry] EMON not available — skipping")
+        """Start all configured telemetry collectors.
 
+        EMON obeys warmup/duration settings:
+          emon_warmup_s   – sleep this many seconds after RAPL/temp start
+                            before starting EMON (skip cold-start transient).
+          emon_duration_s – EMON auto-stops after this many seconds; 0/None
+                            means collect until stop() is called.
+        """
+        # RAPL and temperature start immediately — they are lightweight and
+        # we want power/thermal data across the full run including warmup.
         if self.collect_rapl and self.rapl.is_available():
             self.rapl.start_polling()
             self._active.append("rapl")
@@ -83,6 +91,28 @@ class TelemetryManager:
             if temp_ok:
                 self._active.append("temp")
                 print(f"[telemetry] Temperature ({self._temp_type}) started")
+
+        # EMON: delay by warmup_s then collect for duration_s
+        if self.collect_emon and self.emon.is_available():
+            if self.emon_warmup_s > 0:
+                print(f"[telemetry] EMON warmup: waiting {self.emon_warmup_s}s before starting collection …")
+                self._active.append("emon")  # mark so stop() knows to handle it
+
+                def _delayed_start():
+                    time.sleep(self.emon_warmup_s)
+                    if "emon" in self._active:  # still wanted (stop() not yet called)
+                        ok = self.emon.start_collection(session_name, self.emon_duration_s)
+                        if not ok:
+                            self._active.remove("emon")
+                            print("[telemetry] EMON failed to start after warmup")
+                threading.Thread(target=_delayed_start, daemon=True).start()
+            else:
+                if self.emon.start_collection(session_name, self.emon_duration_s):
+                    self._active.append("emon")
+                    dur = f"{self.emon_duration_s}s" if self.emon_duration_s else "until stop()"
+                    print(f"[telemetry] EMON started (duration={dur})")
+                else:
+                    print("[telemetry] EMON not available — skipping")
 
     def stop(
         self,

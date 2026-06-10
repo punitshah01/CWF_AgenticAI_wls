@@ -17,6 +17,7 @@ Functions:
 import os
 import signal
 import subprocess
+import threading
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Tuple
@@ -99,8 +100,19 @@ class EmonCollector:
 
     # ── Collection lifecycle ──────────────────────────────────────────────────
 
-    def start_collection(self, session_name: str = "emon_session") -> bool:
-        """Start background EMON data collection."""
+    def start_collection(
+        self,
+        session_name: str = "emon_session",
+        duration_s: Optional[int] = None,
+    ) -> bool:
+        """Start background EMON data collection.
+
+        Args:
+            session_name: Label for the output file.
+            duration_s:   If set, EMON auto-stops after this many seconds
+                          (passed as ``-t <duration_s> -s 1``).
+                          If None, collects until stop_collection() is called.
+        """
         if self.status == TelemetryStatus.RUNNING:
             print("[emon] Already running")
             return False
@@ -112,9 +124,17 @@ class EmonCollector:
         output_file = self.output_dir / f"{session_name}.txt"
         self.output_file = output_file
 
+        # -t <n> -s 1  → collect for exactly n seconds then exit automatically
+        if duration_s is not None:
+            sample_args = f"-t {int(duration_s)} -s 1"
+            dur_label   = f"{duration_s}s"
+        else:
+            sample_args = "-t 100 -s 1"  # default ~100 s until stop_collection()
+            dur_label   = "until stop()"
+
         cmd = (
             f"source {sep_vars} && "
-            f"emon -collect -f {output_file} -t 100 -s 1"
+            f"emon -collect -f {output_file} {sample_args}"
         )
         try:
             self.process = subprocess.Popen(
@@ -123,12 +143,23 @@ class EmonCollector:
                 preexec_fn=os.setsid,
             )
             self.status = TelemetryStatus.RUNNING
-            print(f"[emon] Collection started → {output_file} (pid={self.process.pid})")
+            print(f"[emon] Collection started → {output_file} (pid={self.process.pid}, duration={dur_label})")
+
+            # If duration was given, spawn a watchdog so status reflects
+            # when emon exits naturally.
+            if duration_s is not None:
+                def _watchdog():
+                    self.process.wait()
+                    if self.status == TelemetryStatus.RUNNING:
+                        self.status = TelemetryStatus.STOPPED
+                        print(f"[emon] Collection finished after {duration_s}s → {self.output_file}")
+                threading.Thread(target=_watchdog, daemon=True).start()
+
             return True
         except Exception as exc:
             print(f"[emon] Failed to start: {exc}")
             if self.reload_drivers():
-                return self.start_collection(session_name)
+                return self.start_collection(session_name, duration_s)
             self.status = TelemetryStatus.ERROR
             return False
 
