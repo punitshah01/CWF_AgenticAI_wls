@@ -40,10 +40,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 6):
     sys.exit(
-        f"[ERROR] Python 3.10+ required. Current: {sys.version.split()[0]}"
+        f"[ERROR] Python 3.6+ required to run setup.py. Current: {sys.version.split()[0]}"
     )
+# Note: the conda env created will use Python 3.11. The system Python running
+# this script only needs to be 3.6+ since no 3.10+ syntax is used here.
 
 # ---------------------------------------------------------------------------
 # Constants
