@@ -1,9 +1,15 @@
 # =============================================================================
 # configs/webarena.yaml — WebArena Run Configuration for CWF
+#
+# The canonical config now lives in:
+#   benchmarks/webarena/config/default_config.yaml
+#
+# This file is kept for backward compatibility and CI references.
+# Pass --config benchmarks/webarena/config/default_config.yaml to the runner.
 # =============================================================================
 
-# Task selection
-tasks:
+_canonical_config: benchmarks/webarena/config/default_config.yaml
+
   test_start_idx: 0
   test_end_idx: 812       # full suite; use 0-50 for quick smoke test
   instruction_path: "agent/prompts/jsons/p_cot_id_actree_2s.json"

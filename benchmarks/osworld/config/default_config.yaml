@@ -1,0 +1,44 @@
+# =============================================================================
+# benchmarks/osworld/config/default_config.yaml — OSWorld default run config
+# =============================================================================
+
+# Standard CWF runner fields
+model: "local-llm"
+agent: "osworld_agent"
+max_steps: 15
+timeout_seconds: 1800
+output_dir: "results/osworld"
+log_level: "INFO"
+
+# Environment
+environment:
+  provider_name: "docker"   # docker | vm
+  headless: true
+  sleep_after_execution: 3
+
+# LLM inference
+inference:
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  observation_type: "screenshot"
+  temperature: 0.0
+  max_tokens: 1024
+
+# Parallelism
+parallelism:
+  num_envs: 10
+
+# Task selection
+tasks:
+  domains:
+    - "libreoffice_calc"
+    - "libreoffice_writer"
+    - "chrome"
+    - "os"
+  task_ids: []
+
+# CWF topology
+topology:
+  inference_cores: "0-63"
+  env_cores: "64-127"
+  metrics_cores: "128-143"

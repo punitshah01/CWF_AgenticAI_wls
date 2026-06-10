@@ -1,0 +1,43 @@
+# =============================================================================
+# benchmarks/swe-bench/config/default_config.yaml — SWE-bench default config
+# =============================================================================
+
+# Standard CWF runner fields
+model: "local-llm"
+agent: "swe_agent"
+max_steps: 50
+timeout_seconds: 1800
+output_dir: "results/swebench"
+log_level: "INFO"
+
+# Dataset
+dataset:
+  name: "princeton-nlp/SWE-bench_Lite"
+  split: "test"
+  instance_ids: []
+
+# Evaluation harness
+harness:
+  max_workers: 8
+  run_id: "cwf_baseline"
+  timeout_per_task: 1800
+  predictions_path: ""
+
+# LLM inference
+inference:
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  max_iterations: 50
+  cost_limit: null
+
+# Docker
+docker:
+  timeout_build: 600
+  timeout_run: 600
+  max_containers: 8
+
+# CWF topology
+topology:
+  inference_cores: "0-63"
+  env_cores: "64-127"
+  metrics_cores: "128-143"

@@ -92,8 +92,15 @@ def download_sep(version: str, dry_run: bool) -> Path:
     dest = dest_dir / filename
 
     if dest.exists():
-        print(f"[ OK ] SEP installer already cached: {dest}")
-        return dest
+        # Validate the cached file is a real tar archive, not a partial download or HTML error page
+        probe = subprocess.run(
+            ["tar", "tjf", str(dest)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if probe.returncode == 0:
+            print(f"[ OK ] SEP installer already cached: {dest}")
+            return dest
+        print(f"[WARN] Cached SEP archive is corrupt — deleting and re-downloading: {dest}")
+        dest.unlink(missing_ok=True)
 
     # Check repo assets/installers/ cache
     cached = REPO_ROOT / "assets" / "installers" / filename

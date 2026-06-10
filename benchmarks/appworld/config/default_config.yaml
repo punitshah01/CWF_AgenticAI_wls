@@ -1,0 +1,38 @@
+# =============================================================================
+# benchmarks/appworld/config/default_config.yaml — AppWorld default run config
+# =============================================================================
+
+# Standard CWF runner fields (required by run_appworld.py)
+model: "local-llm"
+agent: "simplified_function_calling_agent"
+max_steps: 20
+timeout_seconds: 1800
+output_dir: "results/appworld"
+log_level: "INFO"
+
+# Dataset
+dataset:
+  name: "test_normal"       # train | dev | test_normal | test_challenge
+  task_ids: []              # empty = all tasks in the dataset
+
+# AppWorld server
+server:
+  host: "localhost"
+  port: 5000
+
+# LLM inference
+inference:
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  temperature: 0.0
+  max_tokens: 2048
+
+# Parallelism
+parallelism:
+  num_instances: 1
+
+# CWF topology
+topology:
+  inference_cores: "0-63"
+  env_cores: "64-127"
+  metrics_cores: "128-143"

@@ -1,9 +1,15 @@
 # =============================================================================
 # configs/osworld.yaml — OSWorld Run Configuration for CWF
+#
+# The canonical config now lives in:
+#   benchmarks/osworld/config/default_config.yaml
+#
+# This file is kept for backward compatibility and CI references.
+# Pass --config benchmarks/osworld/config/default_config.yaml to the runner.
 # =============================================================================
 
-# Environment provider
-environment:
+_canonical_config: benchmarks/osworld/config/default_config.yaml
+
   provider_name: "docker"    # docker (Docker+KVM) | vm (bare QEMU)
   headless: true
   sleep_after_execution: 3   # seconds to wait after each action

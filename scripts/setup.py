@@ -301,8 +301,23 @@ def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
             installer = str(cached)
             log(f"Using cached installer: {cached}", "ok")
         else:
-            run(f"wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
+            # --no-check-certificate handles Intel corp SSL inspection on internal networks
+            run(f"wget --no-check-certificate -q "
+                f"https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
                 f" -O {installer}", dry_run=dry_run, check=False)
+            # Validate: miniconda script must start with '#!/'
+            if not dry_run:
+                try:
+                    with open(installer, "rb") as _fh:
+                        magic = _fh.read(3)
+                    if magic != b"#!/":
+                        log(f"Downloaded miniconda installer looks invalid (got {magic!r}) — "
+                            "check network/proxy. Trying curl as fallback.", "warn")
+                        run(f"curl --no-proxy --insecure -L "
+                            f"https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
+                            f" -o {installer}", dry_run=False, check=False)
+                except OSError:
+                    pass
         run(f"bash {installer} -b -p {Path.home()}/miniconda3",
             dry_run=dry_run, check=False)
         # Update PATH immediately so all subsequent conda calls in this process work

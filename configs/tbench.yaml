@@ -1,9 +1,15 @@
 # =============================================================================
 # configs/tbench.yaml — T-Bench Run Configuration for CWF
+#
+# The canonical config now lives in:
+#   benchmarks/t-bench/config/default_config.yaml
+#
+# This file is kept for backward compatibility and CI references.
+# Pass --config benchmarks/t-bench/config/default_config.yaml to the runner.
 # =============================================================================
 
-# Mock API server
-server:
+_canonical_config: benchmarks/t-bench/config/default_config.yaml
+
   host: "localhost"
   port: 8001
   log_requests: true

@@ -1,9 +1,15 @@
 # =============================================================================
 # configs/swebench.yaml — SWE-bench Run Configuration for CWF
+#
+# The canonical config now lives in:
+#   benchmarks/swe-bench/config/default_config.yaml
+#
+# This file is kept for backward compatibility and CI references.
+# Pass --config benchmarks/swe-bench/config/default_config.yaml to the runner.
 # =============================================================================
 
-# Dataset selection
-dataset:
+_canonical_config: benchmarks/swe-bench/config/default_config.yaml
+
   name: "princeton-nlp/SWE-bench_Lite"   # Lite (300) | Verified (500) | Full (2294)
   split: "test"
   instance_ids: []  # empty = all tasks; or list specific IDs e.g. ["sympy__sympy-20590"]

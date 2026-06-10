@@ -1,0 +1,41 @@
+# =============================================================================
+# benchmarks/t-bench/config/default_config.yaml — T-Bench default run config
+# =============================================================================
+
+# Standard CWF runner fields
+model: "local-llm"
+agent: "tool_calling_agent"
+max_steps: 10
+timeout_seconds: 300
+output_dir: "results/tbench"
+log_level: "INFO"
+
+# Mock API server
+server:
+  host: "localhost"
+  port: 8001
+  log_requests: true
+
+# LLM inference
+inference:
+  api_base: "http://localhost:8000/v1"
+  api_key: "not-needed"
+  temperature: 0.0
+  max_tokens: 512
+
+# Evaluation
+evaluation:
+  tool_selection: true
+  param_extraction: true
+  workflow_completion: true
+  error_recovery: true
+
+# Retry
+retry_on_error: true
+retry_limit: 2
+
+# CWF topology
+topology:
+  inference_cores: "0-63"
+  env_cores: "64-67"
+  metrics_cores: "68-71"

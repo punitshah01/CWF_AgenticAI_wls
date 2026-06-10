@@ -65,3 +65,59 @@ jobs:
           print('All Python scripts parse OK')
           "
 
+  py-compile:
+    name: py_compile (syntax check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"   # lowest supported version
+      - name: Compile all Python files
+        run: |
+          find . -name "*.py" \
+            -not -path "./.venv/*" \
+            -not -path "./node_modules/*" \
+            -print0 \
+          | xargs -0 python -m py_compile
+          echo "py_compile: all files OK"
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: Run shellcheck on all .sh files
+        run: |
+          find . -name "*.sh" \
+            -not -path "./.venv/*" \
+            -print0 \
+          | xargs -0 shellcheck --severity=warning
+          echo "shellcheck: all files OK"
+
+  dry-run-smoke:
+    name: Dry-run smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install minimal deps
+        run: pip install pyyaml
+      - name: Smoke — appworld dry-run
+        run: |
+          python benchmarks/appworld/run_appworld.py \
+            --dry-run \
+            --output-dir /tmp/test_appworld
+      - name: Smoke — common/setup.py dry-run
+        run: |
+          python scripts/setup.py \
+            --dry-run \
+            --skip-system \
+            --skip-docker \
+            --skip-conda \
+            --skip-pip
+
