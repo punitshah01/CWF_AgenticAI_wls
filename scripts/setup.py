@@ -324,7 +324,26 @@ def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
         conda_bin = str(Path.home() / "miniconda3" / "bin")
         os.environ["PATH"] = conda_bin + ":" + os.environ.get("PATH", "")
         run(f"{conda_bin}/conda init bash", dry_run=dry_run, check=False)
-        log("Miniconda installed. Re-source ~/.bashrc after setup.", "warn")
+        # Write a one-liner to /etc/profile.d so root's non-interactive shells also get conda
+        profile_snippet = Path("/etc/profile.d/conda.sh")
+        if not dry_run:
+            try:
+                profile_snippet.write_text(
+                    f". {Path.home()}/miniconda3/etc/profile.d/conda.sh\n"
+                )
+                log(f"Wrote conda init to {profile_snippet}", "ok")
+            except PermissionError:
+                pass  # non-root install — ~/.bashrc is sufficient
+        print(
+            "\n"
+            "  ╔══════════════════════════════════════════════════════════╗\n"
+            "  ║  ACTION REQUIRED — activate conda in the current shell  ║\n"
+            f"  ║  Run:  source ~/.bashrc                                  ║\n"
+            f"  ║   or:  source {Path.home()}/miniconda3/etc/profile.d/conda.sh\n"
+            "  ║  Then: conda activate agentic                           ║\n"
+            "  ╚══════════════════════════════════════════════════════════╝\n",
+            flush=True,
+        )
 
     # Use full path so conda works even if not yet in shell PATH
     conda_cmd = str(Path.home() / "miniconda3" / "bin" / "conda")
