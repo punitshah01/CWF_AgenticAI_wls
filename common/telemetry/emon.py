@@ -124,17 +124,20 @@ class EmonCollector:
         output_file = self.output_dir / f"{session_name}.txt"
         self.output_file = output_file
 
-        # -t <n> -s 1  → collect for exactly n seconds then exit automatically
+        # EMON uses -C "event-list" syntax, not -collect
+        # Default event list: IPC, LLC misses, memory BW, stalls
+        event_list = "INST_RETIRED.ANY,LLC_MISSES.ALL_CORES,UNC_ARB_DCH0_OCCUPANCY,CPU_CLK_UNHALTED.THREAD"
+        
         if duration_s is not None:
             sample_args = f"-t {int(duration_s)} -s 1"
             dur_label   = f"{duration_s}s"
         else:
-            sample_args = "-t 100 -s 1"  # default ~100 s until stop_collection()
+            sample_args = "-t 100 -s 1"
             dur_label   = "until stop()"
 
         cmd = (
             f"source {sep_vars} && "
-            f"emon -collect -f {output_file} {sample_args}"
+            f'emon -C "{event_list}" {sample_args} > {output_file} 2>&1'
         )
         try:
             self.process = subprocess.Popen(
