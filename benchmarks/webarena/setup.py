@@ -649,23 +649,41 @@ def validate_services(host: str, include_gitlab: bool, dry_run: bool) -> bool:
         services.append(("GitLab", 8023))
 
     all_ok = True
+    max_wait = 180   # seconds total to wait for all services to come up
+    poll_interval = 10
+
     for name, port in services:
-        try:
-            req = urllib.request.Request(f"http://{host}:{port}", method="GET")
-            resp = urllib.request.urlopen(req, timeout=10)
-            code = resp.getcode()
-        except Exception:
-            code = 0
+        url = f"http://{host}:{port}"
+        deadline = time.time() + max_wait
+        code = 0
+        attempt = 0
+        while time.time() < deadline:
+            attempt += 1
+            try:
+                req = urllib.request.Request(url, method="GET")
+                resp = urllib.request.urlopen(req, timeout=10)
+                code = resp.getcode()
+                if code in (200, 302):
+                    break
+            except Exception:
+                code = 0
+            elapsed = int(time.time() - (deadline - max_wait))
+            if attempt == 1:
+                log(f"  {name:12s} ({port}): waiting for service to be ready ...", "info")
+            else:
+                print(f"  [{elapsed:3d}s] {name} not ready yet (HTTP {code}) — retrying ...",
+                      flush=True)
+            time.sleep(poll_interval)
 
         status = "ok" if code in (200, 302) else "error"
         if status == "error":
             all_ok = False
-        log(f"  {name:12s} ({port}): {code}", status)
+        log(f"  {name:12s} ({port}): HTTP {code}", status)
 
     if all_ok:
         log("All services healthy!", "ok")
     else:
-        log("Some services are down — check Docker containers", "warn")
+        log("Some services are down — check with: docker ps && docker logs <name>", "warn")
 
     return all_ok
 
