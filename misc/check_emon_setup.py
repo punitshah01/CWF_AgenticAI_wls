@@ -50,20 +50,38 @@ def check_sep_version() -> dict:
     if not emon_bin.exists():
         return {"name": "SEP version", "ok": False, "detail": "emon binary not found"}
 
-    rc, out, _ = _run(f"{emon_bin} --version 2>&1 | head -2")
-    # Example: "EMON version K (5.38 release) ..."
+    rc, out, err = _run(f"{emon_bin} --version 2>&1 | head -4")
+    combined = (out + " " + err).replace("(", " ").replace(")", " ").replace(",", " ")
     version_str = "unknown"
     version_ok = False
-    for token in out.split():
-        if "." in token:
+
+    import re
+    # Match patterns like: 5.38  5.58  5_58  "version 5 58"  "K(5.38 release)"
+    for pattern in (
+        r"(\d+)\.(\d+)",           # canonical:  5.38
+        r"(\d+)_(\d+)",            # underscore: 5_58
+        r"sep.*?(\d+).*?(\d+)",    # loose:  sep ... 5 ... 58
+    ):
+        m = re.search(pattern, combined, re.IGNORECASE)
+        if m:
             try:
-                parts = token.split(".")
-                major, minor = int(parts[0]), int(parts[1].split(")")[0].split(" ")[0])
-                version_str = f"{major}.{minor}"
-                version_ok = (major, minor) >= MIN_VERSION
-                break
-            except ValueError:
+                major, minor = int(m.group(1)), int(m.group(2))
+                if 1 <= major <= 20 and 0 <= minor <= 999:   # sanity bounds
+                    version_str = f"{major}.{minor}"
+                    version_ok = (major, minor) >= MIN_VERSION
+                    break
+            except (ValueError, IndexError):
                 continue
+
+    if version_str == "unknown":
+        # Last resort: version is embedded in the installed directory name
+        # e.g. sep_private_5_58_beta_linux_...
+        m2 = re.search(r"sep[^/]*?(\d+)[._](\d+)",
+                       str(list(SEP_ROOT.glob("../*sep*"))[:1]), re.IGNORECASE)
+        if m2:
+            major, minor = int(m2.group(1)), int(m2.group(2))
+            version_str = f"{major}.{minor} (from dir name)"
+            version_ok = (major, minor) >= MIN_VERSION
 
     return {
         "name": "SEP version",
@@ -98,19 +116,23 @@ def load_drivers() -> bool:
 
 
 def check_pyedp() -> dict:
-    pyedp = SEP_ROOT / "config" / "edp" / "pyedp" / "pyedp.py"
-    if pyedp.exists():
-        return {"name": "pyedp", "ok": True, "detail": str(pyedp)}
+    # Search the whole SEP tree for pyedp.py — location varies by SEP release
+    pyedp_candidates = list(SEP_ROOT.rglob("pyedp.py"))
+    if pyedp_candidates:
+        pyedp = pyedp_candidates[0]
+        return {"name": "pyedp / edp.rb", "ok": True, "detail": str(pyedp)}
 
     # Fallback: jruby edp.rb
     jruby = shutil.which("jruby")
-    edp_rb = SEP_ROOT / "config" / "edp" / "edp.rb"
-    if jruby and edp_rb.exists():
+    edp_rb_candidates = list(SEP_ROOT.rglob("edp.rb"))
+    if jruby and edp_rb_candidates:
         return {"name": "pyedp (jruby fallback)", "ok": True,
-                "detail": f"jruby={jruby}, edp.rb={edp_rb}"}
+                "detail": f"jruby={jruby}, edp.rb={edp_rb_candidates[0]}"}
 
+    # Report where we looked so it's actionable
+    default_path = SEP_ROOT / "config" / "edp" / "pyedp" / "pyedp.py"
     return {"name": "pyedp / edp.rb", "ok": False,
-            "detail": f"Neither found (pyedp at {pyedp}, jruby={jruby})"}
+            "detail": f"pyedp.py not found anywhere under {SEP_ROOT}; jruby={jruby}"}
 
 
 def main() -> None:
