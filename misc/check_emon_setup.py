@@ -144,14 +144,14 @@ def check_pyedp() -> dict:
         return {"name": "pyedp (jruby fallback)", "ok": True,
                 "detail": f"jruby={jruby}, edp.rb={edp_rb_candidates[0]}"}
 
-    return {"name": "pyedp / edp.rb", "ok": False,
+    return {"name": "pyedp / edp.rb", "ok": False, "warn_only": True,
             "detail": (
                 f"pyedp.py not found under {SEP_ROOT}; "
                 "pyedp pip package not installed; "
                 f"jruby={jruby}. "
-                "Fix: pip install pyedp  OR  "
-                "pip install numpy pandas defusedxml pytz xlsxwriter multiprocess "
-                "tables natsort tqdm polars openpyxl pyarrow jsonschema"
+                "EMON collection still works. "
+                "For EDP post-processing: locate pyedp in your SEP tarball and run "
+                "pip install /path/to/sep/.../pyedp/"
             )}
 
 
@@ -186,20 +186,25 @@ def main() -> None:
         print(json.dumps(checks, indent=2))
     else:
         print()
-        all_ok = True
+        hard_fail = False
         for c in checks:
-            mark = "[ OK ]" if c["ok"] else "[FAIL]"
+            warn_only = c.get("warn_only", False)
+            if c["ok"]:
+                mark = "[ OK ]"
+            elif warn_only:
+                mark = "[WARN]"
+            else:
+                mark = "[FAIL]"
+                hard_fail = True
             print(f"  {mark}  {c['name']:<25}  {c['detail']}")
-            if not c["ok"]:
-                all_ok = False
         print()
-        if all_ok:
-            print("  EMON setup: READY")
+        if not hard_fail:
+            print("  EMON setup: READY  (collection works; see WARN items for optional post-processing)")
         else:
             print("  EMON setup: NOT READY — fix the items marked [FAIL] above")
 
-    all_ok = all(c["ok"] for c in checks)
-    sys.exit(0 if all_ok else 1)
+    hard_fail = any(not c["ok"] and not c.get("warn_only", False) for c in checks)
+    sys.exit(0 if not hard_fail else 1)
 
 
 if __name__ == "__main__":

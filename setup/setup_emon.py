@@ -178,21 +178,21 @@ def configure_pyedp(dry_run: bool) -> None:
         print(f"[ OK ] pyedp directory: {PYEDP_DIR}")
         _run(f"cd {PYEDP_DIR} && python3 -m pip install .", dry_run)
     else:
-        # SEP 5.58 beta does not bundle pyedp in the SEP tree.
-        # Install the standalone pyedp package from PyPI.
-        print(f"[INFO] {PYEDP_DIR} not found — installing pyedp from PyPI ...")
-        _run("python3 -m pip install -U pyedp", dry_run)
-        # Verify it's now importable
-        check = subprocess.run(
-            "python3 -c 'import pyedp; print(pyedp.__file__)'",
-            shell=True, capture_output=True, text=True,
-        )
-        if not dry_run and check.returncode != 0:
-            print("[WARN] pyedp pip install may have failed — check manually:",
-                  file=sys.stderr)
-            print("       pip install pyedp", file=sys.stderr)
+        # SEP 5.58 beta: search the whole SEP tree for any pyedp directory
+        candidates = list(SEP_ROOT.rglob("pyedp.py")) if not dry_run else []
+        if candidates:
+            found_dir = candidates[0].parent
+            print(f"[ OK ] pyedp found at: {found_dir}")
+            _run(f"cd {found_dir} && python3 -m pip install .", dry_run)
         else:
-            print(f"[ OK ] pyedp installed: {check.stdout.strip()}")
+            # pyedp is not bundled with this SEP release.
+            # Install only the dependency packages — pyedp.py itself must come
+            # from the SEP package; without it EMON post-processing won't work
+            # but EMON data collection will still function.
+            print(f"[WARN] pyedp not found under {SEP_ROOT}", file=sys.stderr)
+            print("[WARN] EMON collection will work but post-processing (EDP) won't.", file=sys.stderr)
+            print("[WARN] To fix: locate pyedp.py in your SEP tarball and run:", file=sys.stderr)
+            print("[WARN]   pip install /path/to/sep/.../pyedp/", file=sys.stderr)
 
     print("[ OK ] pyedp configured")
 
