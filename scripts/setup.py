@@ -904,6 +904,46 @@ def post_install_swebench(conda_env: str, dry_run: bool) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ── EMON / SEP setup  (Intel internal — requires artifactory access)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def install_emon(dry_run: bool, sep_installer: str = "",
+                 skip_kernel_devel: bool = False) -> None:
+    """
+    Install Intel SEP/EMON by delegating to setup/setup_emon.py.
+
+    Matches the pnpwls/setup/setup_emon.sh approach:
+      1. kernel-devel check/install (setup_kernel_devel.py)
+      2. Download SEP beta from Intel artifactory
+      3. Run sep-installer.sh --accept-license -ni -u -i
+      4. Install pyedp Python dependencies + pip install .
+      5. Clone and install TMC (tools.dcso.telemetry.client)
+      6. Load SEP kernel drivers (insmod-sep)
+    """
+    banner("Step 9: Intel SEP/EMON Setup")
+    setup_emon_script = Path(__file__).resolve().parent.parent / "setup" / "setup_emon.py"
+
+    if not setup_emon_script.exists():
+        log(f"setup_emon.py not found: {setup_emon_script}", "error")
+        return
+
+    flags = []
+    if dry_run:
+        flags.append("--dry-run")
+    if sep_installer:
+        flags.append(f"--sep-installer {sep_installer}")
+    if skip_kernel_devel:
+        flags.append("--skip-kernel-devel")
+
+    cmd = f"{sys.executable} {setup_emon_script} {' '.join(flags)}"
+    result = run(cmd, dry_run=dry_run, check=False)
+    if result and result.returncode != 0:
+        log("EMON/SEP setup completed with warnings — check output above.", "warn")
+    else:
+        log("EMON/SEP setup complete.", "ok")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ── Summary
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -991,6 +1031,21 @@ def parse_args() -> argparse.Namespace:
         "--pip-cache-dir", default=os.environ.get("PIP_CACHE_DIR", ""),
         help="Path to pip wheel cache directory. Shared cache avoids re-downloading "
              "wheels on each run. Override with PIP_CACHE_DIR env var.",
+    )
+    parser.add_argument(
+        "--install-emon", action="store_true",
+        help="Install Intel SEP/EMON (requires Intel internal network / artifactory). "
+             "Runs setup/setup_emon.py which installs kernel-devel, SEP 5.58 beta, "
+             "pyedp, and TMC telemetry client.",
+    )
+    parser.add_argument(
+        "--sep-installer",
+        help="Path to a pre-downloaded SEP .tar.bz2 (used with --install-emon "
+             "to skip the artifactory download).",
+    )
+    parser.add_argument(
+        "--skip-kernel-devel", action="store_true",
+        help="With --install-emon: skip kernel-devel install step.",
     )
     return parser.parse_args()
 
@@ -1083,6 +1138,14 @@ def main() -> None:
             post_install_appworld(args.conda_env, args.dry_run)
         if "swebench" in args.benchmarks:
             post_install_swebench(args.conda_env, args.dry_run)
+
+    # ── EMON / SEP (opt-in — requires Intel internal network)
+    if args.install_emon:
+        install_emon(
+            args.dry_run,
+            sep_installer=getattr(args, "sep_installer", "") or "",
+            skip_kernel_devel=getattr(args, "skip_kernel_devel", False),
+        )
 
     print_summary(args.benchmarks, args.conda_env, os_info)
     log("Setup complete.", "ok")
