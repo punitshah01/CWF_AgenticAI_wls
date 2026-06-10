@@ -129,6 +129,13 @@ def run_capture(cmd: str, dry_run: bool = False) -> str:
     return result.stdout.strip()
 
 
+def pip_install(pip_bin: str, packages: list, dry_run: bool) -> None:
+    """Install packages idempotently -- pip skips packages already satisfying version constraints."""
+    for i in range(0, len(packages), 20):
+        chunk = " ".join(f'"{p}"' for p in packages[i:i+20])
+        run(f"{pip_bin} install --quiet {chunk}", dry_run=dry_run)
+
+
 def get_host_ip() -> str:
     """Auto-detect host IP from first non-loopback interface."""
     try:
@@ -286,10 +293,23 @@ def setup_python_env(dry_run: bool) -> str:
     pip = str(venv_path / "bin" / "pip")
 
     run(f"{pip} install --upgrade pip setuptools wheel", dry_run=dry_run)
-    run(f"{pip} install gymnasium 'playwright==1.32.1' Pillow evaluate "
-        f"'openai==0.27.0' types-tqdm tiktoken aiolimiter 'beartype==0.12.0' "
-        f"flask nltk text-generation 'transformers>=4.33.2,<4.40'",
-        dry_run=dry_run)
+    webarena_pkgs = [
+        "gymnasium",
+        "playwright==1.32.1",
+        "Pillow>=9.0",
+        "evaluate",
+        "openai==0.27.0",
+        "types-tqdm",
+        "tiktoken",
+        "aiolimiter",
+        "beartype==0.12.0",
+        "flask>=2.0",
+        "nltk",
+        "text-generation",
+        "transformers>=4.33.2,<4.40",
+    ]
+    log(f"Installing {len(webarena_pkgs)} packages (skipping already-satisfied)...", "info")
+    pip_install(pip, webarena_pkgs, dry_run)
 
     # Install playwright browser (skip install-deps on RHEL — done in Step 2)
     run(f"{venv_path}/bin/playwright install", dry_run=dry_run)

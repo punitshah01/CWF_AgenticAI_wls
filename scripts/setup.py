@@ -334,13 +334,19 @@ def setup_git_lfs(dry_run: bool) -> None:
 # Step 5: Common Python packages
 # ---------------------------------------------------------------------------
 
+def pip_install(pip_cmd: str, packages: List[str], dry_run: bool) -> None:
+    """Install packages idempotently -- pip skips packages already satisfying version constraints."""
+    for i in range(0, len(packages), 20):
+        chunk = " ".join(f'"{p}"' for p in packages[i:i+20])
+        run(f"{pip_cmd} install --quiet {chunk}", dry_run=dry_run, check=False)
+
+
 def install_common_pip(conda_env: str, dry_run: bool) -> None:
     banner(f"Step 5: Common Python Packages  (conda env: {conda_env})")
     run(f"conda run -n {conda_env} pip install --upgrade pip setuptools wheel",
         dry_run=dry_run, check=False)
-    pkgs = " ".join(f'"{p}"' for p in COMMON_PIP)
-    run(f"conda run -n {conda_env} pip install --quiet {pkgs}",
-        dry_run=dry_run, check=False)
+    log(f"Installing {len(COMMON_PIP)} packages (skipping already-satisfied)...", "info")
+    pip_install(f"conda run -n {conda_env} pip", COMMON_PIP, dry_run)
     log("Common Python packages installed", "ok")
 
 
