@@ -116,23 +116,43 @@ def load_drivers() -> bool:
 
 
 def check_pyedp() -> dict:
-    # Search the whole SEP tree for pyedp.py — location varies by SEP release
+    # 1. Search the whole SEP tree for pyedp.py — location varies by SEP release
     pyedp_candidates = list(SEP_ROOT.rglob("pyedp.py"))
     if pyedp_candidates:
-        pyedp = pyedp_candidates[0]
-        return {"name": "pyedp / edp.rb", "ok": True, "detail": str(pyedp)}
+        return {"name": "pyedp / edp.rb", "ok": True, "detail": str(pyedp_candidates[0])}
 
-    # Fallback: jruby edp.rb
+    # 2. Check if pyedp is installed as a Python package (SEP 5.58 beta ships it this way)
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("pyedp")
+        if spec is not None:
+            return {"name": "pyedp / edp.rb", "ok": True,
+                    "detail": f"pyedp pip package installed ({spec.origin})"}
+    except (ModuleNotFoundError, ValueError):
+        pass
+
+    # 3. Check if pyedp CLI is on PATH
+    pyedp_bin = shutil.which("pyedp")
+    if pyedp_bin:
+        return {"name": "pyedp / edp.rb", "ok": True,
+                "detail": f"pyedp binary found: {pyedp_bin}"}
+
+    # 4. Fallback: jruby edp.rb
     jruby = shutil.which("jruby")
     edp_rb_candidates = list(SEP_ROOT.rglob("edp.rb"))
     if jruby and edp_rb_candidates:
         return {"name": "pyedp (jruby fallback)", "ok": True,
                 "detail": f"jruby={jruby}, edp.rb={edp_rb_candidates[0]}"}
 
-    # Report where we looked so it's actionable
-    default_path = SEP_ROOT / "config" / "edp" / "pyedp" / "pyedp.py"
     return {"name": "pyedp / edp.rb", "ok": False,
-            "detail": f"pyedp.py not found anywhere under {SEP_ROOT}; jruby={jruby}"}
+            "detail": (
+                f"pyedp.py not found under {SEP_ROOT}; "
+                "pyedp pip package not installed; "
+                f"jruby={jruby}. "
+                "Fix: pip install pyedp  OR  "
+                "pip install numpy pandas defusedxml pytz xlsxwriter multiprocess "
+                "tables natsort tqdm polars openpyxl pyarrow jsonschema"
+            )}
 
 
 def main() -> None:

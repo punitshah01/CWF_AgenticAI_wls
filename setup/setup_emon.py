@@ -166,25 +166,33 @@ def load_drivers(dry_run: bool) -> None:
 
 
 def configure_pyedp(dry_run: bool) -> None:
-    """Install pyedp Python dependencies and run pip install . (matches pnpwls)."""
+    """Install pyedp Python dependencies and pyedp itself (matches pnpwls)."""
     print("\n[INFO] Configuring pyedp ...")
 
-    if not PYEDP_DIR.exists() and not dry_run:
-        print(f"[WARN] pyedp directory not found: {PYEDP_DIR}", file=sys.stderr)
-        print("[WARN] SEP may not be installed yet — skipping pyedp setup", file=sys.stderr)
-        return
-
-    print(f"[ OK ] pyedp directory: {PYEDP_DIR}")
-
-    # Step 1: install all required packages (matches pnpwls package list exactly)
+    # Full pyedp dependency list
     pkgs = " ".join(PYEDP_PIP_PACKAGES)
     _run(f"python3 -m pip install -U {pkgs}", dry_run)
 
-    # Also install jsonschema if missing (pnpwls conditional install)
-    _run("python3 -m pip install -U jsonschema", dry_run)
-
-    # Step 2: install pyedp itself (pip install .)
-    _run(f"cd {PYEDP_DIR} && python3 -m pip install .", dry_run)
+    if PYEDP_DIR.exists():
+        # SEP shipped pyedp source under /opt/intel/sep — install from there
+        print(f"[ OK ] pyedp directory: {PYEDP_DIR}")
+        _run(f"cd {PYEDP_DIR} && python3 -m pip install .", dry_run)
+    else:
+        # SEP 5.58 beta does not bundle pyedp in the SEP tree.
+        # Install the standalone pyedp package from PyPI.
+        print(f"[INFO] {PYEDP_DIR} not found — installing pyedp from PyPI ...")
+        _run("python3 -m pip install -U pyedp", dry_run)
+        # Verify it's now importable
+        check = subprocess.run(
+            "python3 -c 'import pyedp; print(pyedp.__file__)'",
+            shell=True, capture_output=True, text=True,
+        )
+        if not dry_run and check.returncode != 0:
+            print("[WARN] pyedp pip install may have failed — check manually:",
+                  file=sys.stderr)
+            print("       pip install pyedp", file=sys.stderr)
+        else:
+            print(f"[ OK ] pyedp installed: {check.stdout.strip()}")
 
     print("[ OK ] pyedp configured")
 
