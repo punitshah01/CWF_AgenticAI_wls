@@ -106,9 +106,11 @@ def download_sep(version: str, dry_run: bool) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     if shutil.which("wget"):
-        _run(f"wget --no-proxy -c --progress=bar:force -O {dest} '{url}'", dry_run)
+        # --no-check-certificate: Intel internal Artifactory uses a corp cert
+        _run(f"wget --no-proxy --no-check-certificate -c --progress=bar:force -O {dest} '{url}'", dry_run)
     elif shutil.which("curl"):
-        _run(f"curl --noproxy '*' -L --continue-at - -o {dest} '{url}'", dry_run)
+        # -k: skip cert verification for Intel internal Artifactory
+        _run(f"curl --noproxy '*' -k -L --continue-at - -o {dest} '{url}'", dry_run)
     else:
         print("[ERROR] wget or curl required to download SEP", file=sys.stderr)
         sys.exit(1)

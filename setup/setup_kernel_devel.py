@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations  # enables str | None syntax on Python 3.9
 """
 setup_kernel_devel.py
 

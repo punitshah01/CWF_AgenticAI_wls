@@ -305,16 +305,22 @@ def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
                 f" -O {installer}", dry_run=dry_run, check=False)
         run(f"bash {installer} -b -p {Path.home()}/miniconda3",
             dry_run=dry_run, check=False)
-        run(f"{Path.home()}/miniconda3/bin/conda init bash",
-            dry_run=dry_run, check=False)
-        os.environ["PATH"] = f"{Path.home()}/miniconda3/bin:" + os.environ.get("PATH", "")
+        # Update PATH immediately so all subsequent conda calls in this process work
+        conda_bin = str(Path.home() / "miniconda3" / "bin")
+        os.environ["PATH"] = conda_bin + ":" + os.environ.get("PATH", "")
+        run(f"{conda_bin}/conda init bash", dry_run=dry_run, check=False)
         log("Miniconda installed. Re-source ~/.bashrc after setup.", "warn")
 
-    result = subprocess.run("conda env list", shell=True, capture_output=True, text=True)
+    # Use full path so conda works even if not yet in shell PATH
+    conda_cmd = str(Path.home() / "miniconda3" / "bin" / "conda")
+    if not Path(conda_cmd).exists():
+        conda_cmd = shutil.which("conda") or "conda"  # fall back to PATH
+
+    result = subprocess.run(f"{conda_cmd} env list", shell=True, capture_output=True, text=True)
     if not dry_run and conda_env in (result.stdout or ""):
         log(f"Conda env '{conda_env}' already exists.", "ok")
     else:
-        run(f"conda create -y -n {conda_env} python={python_version}",
+        run(f"{conda_cmd} create -y -n {conda_env} python={python_version}",
             dry_run=dry_run, check=False)
         log(f"Conda env '{conda_env}' created (Python {python_version})", "ok")
 
@@ -336,6 +342,14 @@ def setup_git_lfs(dry_run: bool) -> None:
 # Step 5: Common Python packages
 # ---------------------------------------------------------------------------
 
+def _conda_cmd() -> str:
+    """Return full path to conda binary, falling back to 'conda' if already in PATH."""
+    full = Path.home() / "miniconda3" / "bin" / "conda"
+    if full.exists():
+        return str(full)
+    return shutil.which("conda") or "conda"
+
+
 def pip_install(pip_cmd: str, packages: List[str], dry_run: bool) -> None:
     """Install packages idempotently -- pip skips packages already satisfying version constraints."""
     for i in range(0, len(packages), 20):
@@ -345,10 +359,11 @@ def pip_install(pip_cmd: str, packages: List[str], dry_run: bool) -> None:
 
 def install_common_pip(conda_env: str, dry_run: bool) -> None:
     banner(f"Step 5: Common Python Packages  (conda env: {conda_env})")
-    run(f"conda run -n {conda_env} pip install --upgrade pip setuptools wheel",
+    conda = _conda_cmd()
+    run(f"{conda} run -n {conda_env} pip install --upgrade pip setuptools wheel",
         dry_run=dry_run, check=False)
     log(f"Installing {len(COMMON_PIP)} packages (skipping already-satisfied)...", "info")
-    pip_install(f"conda run -n {conda_env} pip", COMMON_PIP, dry_run)
+    pip_install(f"{conda} run -n {conda_env} pip", COMMON_PIP, dry_run)
     log("Common Python packages installed", "ok")
 
 
