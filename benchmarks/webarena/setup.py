@@ -37,8 +37,10 @@ import sys
 import time
 from pathlib import Path
 
-if sys.version_info < (3, 10):
-    sys.exit(f"[ERROR] Python 3.10+ required. Current: {sys.version.split()[0]}")
+# WebArena itself requires Python 3.10+ at runtime, but the setup script
+# can be run with Python 3.9 — it will install python3.11 via dnf and use that.
+if sys.version_info < (3, 6):
+    sys.exit(f"[ERROR] Python 3.6+ required to run setup. Current: {sys.version.split()[0]}")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -710,6 +712,9 @@ def main() -> None:
     print(f"  Include GitLab: {args.include_gitlab}")
     print(f"  LLM Model     : {args.model}")
     print(f"  Dry Run       : {args.dry_run}")
+    print()
+    print("  NOTE: WebArena setup uses its own venv (~~/webarena_venv).")
+    print("        conda is NOT required for WebArena.")
     print()
 
     # Step 1: Docker + iptables
