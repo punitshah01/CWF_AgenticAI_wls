@@ -655,6 +655,7 @@ def validate_services(host: str, include_gitlab: bool, dry_run: bool) -> bool:
         log("[dry-run] Would validate all services", "info")
         return True
 
+    import urllib.error
     import urllib.request
 
     services = [
@@ -667,46 +668,91 @@ def validate_services(host: str, include_gitlab: bool, dry_run: bool) -> bool:
     if include_gitlab:
         services.append(("GitLab", 8023))
 
+    # Per-service max wait in seconds - Magento boots slowly.
+    service_timeouts = {
+        "Shopping": 600,
+        "ShopAdmin": 600,
+        "Forum": 120,
+        "Wikipedia": 120,
+        "Homepage": 60,
+        "GitLab": 300,
+    }
+    container_map = {
+        "Shopping": "shopping",
+        "ShopAdmin": "shopping_admin",
+        "Forum": "forum",
+        "Wikipedia": "wikipedia",
+        "GitLab": "gitlab",
+    }
+
+    # Raise HTTPError for redirect responses instead of auto-following them.
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
     all_ok = True
-    max_wait = 180   # seconds total to wait for all services to come up
     poll_interval = 10
 
     for name, port in services:
+        container_name = container_map.get(name)
+        if container_name:
+            status = run_capture(
+                f"docker inspect -f '{{{{.State.Status}}}}' {container_name} 2>/dev/null"
+            )
+            if status and status != "running":
+                log(
+                    f"  {name:12s} ({port}): container '{container_name}' is '{status}' - "
+                    f"check: docker logs {container_name}",
+                    "error",
+                )
+                all_ok = False
+                continue
+
         # Use localhost for Docker container health checks (ports are mapped to 127.0.0.1)
         url = f"http://localhost:{port}"
         start_time = time.time()
+        max_wait = service_timeouts.get(name, 180)
         deadline = start_time + max_wait
         code = 0
         attempt = 0
         printed_header = False
+        err_str = ""
         while time.time() < deadline:
             attempt += 1
             try:
+                opener = urllib.request.build_opener(_NoRedirect())
                 req = urllib.request.Request(url, method="GET")
-                resp = urllib.request.urlopen(req, timeout=5)
-                code = resp.getcode()
-                if code in (200, 302):
+                try:
+                    resp = opener.open(req, timeout=5)
+                    code = resp.getcode()
+                except urllib.error.HTTPError as http_err:
+                    code = http_err.code
+                err_str = ""
+                if code in (200, 302, 301, 403):
                     elapsed = int(time.time() - start_time)
-                    status = "ok"
-                    log(f"  {name:12s} ({port}): HTTP {code} [{elapsed}s]", status)
+                    log(f"  {name:12s} ({port}): HTTP {code} ✓ [{elapsed}s]", "ok")
                     break
+                err_str = f"HTTP {code}"
             except Exception as e:
                 code = 0
+                err_str = f"{type(e).__name__}: {e}"
             
             elapsed = int(time.time() - start_time)
             if not printed_header:
                 log(f"  {name:12s} ({port}): waiting for service to be ready ...", "info")
                 printed_header = True
-            else:
-                print(f"  [{elapsed:3d}s] {name} not ready yet (HTTP {code}) — retrying ...",
-                      flush=True)
+            print(f"  [{elapsed:3d}s] {name} not ready yet ({err_str}) — retrying ...",
+                  flush=True)
             time.sleep(poll_interval)
 
-        if code not in (200, 302):
+        if code not in (200, 302, 301, 403):
             all_ok = False
             elapsed = int(time.time() - start_time)
-            status = "error"
-            log(f"  {name:12s} ({port}): HTTP {code} timeout after {elapsed}s", status)
+            last_error = err_str or f"HTTP {code}"
+            log(f"  {name:12s} ({port}): timed out after {elapsed}s (last error: {last_error})", "error")
+            if container_name:
+                log(f"  Last 20 lines of '{container_name}' logs:", "warn")
+                os.system(f"docker logs --tail 20 {container_name} 2>&1 | sed 's/^/    /'")
 
     if all_ok:
         log("All services healthy!", "ok")
@@ -741,6 +787,8 @@ def parse_args() -> argparse.Namespace:
                         help="Directory for Docker image tarballs / .zim file.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print commands without executing.")
+    parser.add_argument("--health-check-only", action="store_true",
+                        help="Skip setup steps and run only Step 10 service validation.")
     return parser.parse_args()
 
 
@@ -762,6 +810,10 @@ def main() -> None:
     print("  NOTE: WebArena setup uses its own venv (~~/webarena_venv).")
     print("        conda is NOT required for WebArena.")
     print()
+
+    if args.health_check_only:
+        ok = validate_services(host, args.include_gitlab, args.dry_run)
+        sys.exit(0 if ok else 1)
 
     # Step 1: Docker + iptables
     if not args.skip_docker:
