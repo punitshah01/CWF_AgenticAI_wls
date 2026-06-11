@@ -51,6 +51,7 @@ from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_
 BENCHMARK = "tbench"
 BENCHMARK_DIR = Path(__file__).resolve().parent
 WORKDIR = Path.home() / "cwf_agentic" / "tbench"
+_SETUP_MARKER = BENCHMARK_DIR / ".setup_complete"
 
 # ── Global state for signal-handler cleanup ───────────────────────────────────
 _TELEMETRY_MANAGER = None
@@ -89,6 +90,13 @@ ALL_CATEGORIES = [
 
 
 def parse_args() -> argparse.Namespace:
+    if not _SETUP_MARKER.exists():
+        print(
+            "[ERROR] Setup not complete. Run first:\n"
+            "        python3 benchmarks/t-bench/setup.py",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     p = argparse.ArgumentParser(
         description="T-Bench evaluation runner for CWF",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

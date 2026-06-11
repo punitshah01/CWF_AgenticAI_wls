@@ -164,40 +164,66 @@ CWF_AgenticAI_wls/
 
 ## Quick Start
 
-### Step 1 — Base system setup
-```python
-# Install Docker, KVM, Conda, numactl, git-lfs
-python3 scripts/setup.py --skip-python --skip-post-install
+### Step 1 — Base environment setup
 
-# Or install a specific benchmark's full stack:
-python3 benchmarks/appworld/setup.py      # lightest — start here
+```bash
+# Create Python venv (optional, recommended)
+python3 setup/setup_venv.py --python python3.11
+
+# Apply platform tuning (run as root)
+sudo python3 setup/setup_platform.py
+
+# Install benchmark dependencies
+python3 benchmarks/appworld/setup.py       # lightest — start here
 python3 benchmarks/t-bench/setup.py
 python3 benchmarks/swe-bench/setup.py
-python3 benchmarks/webarena/setup.py      # ⚠️ use separate conda env (openai conflict)
-python3 benchmarks/osworld/setup.py       # requires KVM in BIOS
+python3 benchmarks/webarena/setup.py
+python3 benchmarks/osworld/setup.py        # requires KVM/VT-x in BIOS
 ```
 
 ### Step 2 — Start LLM inference server
-```python
-# llama.cpp (recommended — fast startup, GGUF Q4_K_M)
-python3 scripts/inference/start_llamacpp.py --model 8b --cores 64
-python3 scripts/inference/start_llamacpp.py --model 32b --cores 96
 
-# vLLM (recommended for multi-instance serving, OpenVINO backend)
-python3 scripts/inference/start_vllm.py --model 8b --cores 64
+```bash
+# llama.cpp (fast startup, GGUF)
+python3 scripts/inference/start_llamacpp.py --model 8b --cores 64
+
+# vLLM (higher throughput, OpenVINO backend)
 python3 scripts/inference/start_vllm.py --model 32b --cores 96
 ```
 
 ### Step 3 — Run a benchmark
-```python
-# Quick validation (dry-run first)
-python3 benchmarks/appworld/run.py --model 8b --dry-run
-python3 benchmarks/appworld/run.py --model 8b --dataset dev --collect-rapl
 
-# SWE-bench
+```bash
+# Smoke test
+python3 benchmarks/appworld/run.py --model 8b --dataset dev --dry-run
+
+# SWE-bench Lite
 python3 benchmarks/swe-bench/run.py --model 32b --split lite --max-workers 8
 
-# WebArena (smoke test: 10 tasks)
+# WebArena (10-task smoke test)
+python3 benchmarks/webarena/run.py --model 8b --start-idx 0 --end-idx 10
+
+# OSWorld
+python3 benchmarks/osworld/run.py --model 32b --num-envs 4 --obs-type screenshot
+
+# T-Bench
+python3 benchmarks/t-bench/run.py --model 8b
+```
+
+Results land in `results/<benchmark>/<run_id>/results.csv` and `results.json`.
+
+---
+
+## Common Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `Setup not complete. Run setup.py first` | Run `python3 benchmarks/<name>/setup.py` |
+| `Not running inside a virtual environment` | `source .venv/bin/activate` or `conda activate <env>` |
+| `EMON driver not loaded` | `sudo /opt/intel/sep/sepdk/src/insmod-sep -r -g root` |
+| Docker permission denied | `sudo systemctl start docker` |
+| Shopping/service not ready | `docker logs shopping -n 50`; wait 2-5 min for Magento |
+| KVM not available | Enable VT-x/AMD-V in BIOS; verify with `egrep -c '(vmx|svm)' /proc/cpuinfo` |
 python3 benchmarks/webarena/run.py --model 32b --start-idx 0 --end-idx 10
 
 # OSWorld

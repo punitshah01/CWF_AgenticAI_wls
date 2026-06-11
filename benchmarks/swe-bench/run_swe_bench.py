@@ -17,7 +17,29 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
+# Warn if not running inside a virtual environment
+if sys.prefix == sys.base_prefix:
+    print(
+        "[WARN] Not running inside a virtual environment. "
+        "Run: source .venv/bin/activate  (or the conda env from setup.py)",
+        file=sys.stderr,
+    )
+
 from common.cli_utils import get_base_parser, parse_config, setup_logging  # noqa: E402
+
+_BENCHMARK_DIR = Path(__file__).resolve().parent
+_SETUP_MARKER = _BENCHMARK_DIR / ".setup_complete"
+
+
+def _check_setup_complete() -> None:
+    """Exit with an actionable error if setup.py has not been run."""
+    if not _SETUP_MARKER.exists():
+        print(
+            "[ERROR] Setup not complete. Run first:\n"
+            "        python3 benchmarks/swe-bench/setup.py",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +93,7 @@ def build_parser():
 
 
 def main():
+    _check_setup_complete()
     parser = build_parser()
     args = parser.parse_args()
     setup_logging(args.verbose)

@@ -54,6 +54,7 @@ from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_
 
 BENCHMARK = "swebench"
 BENCHMARK_DIR = Path(__file__).resolve().parent
+_SETUP_MARKER = BENCHMARK_DIR / ".setup_complete"
 
 # ── Global state for signal-handler cleanup ───────────────────────────────────
 _TELEMETRY_MANAGER = None
@@ -90,6 +91,13 @@ WORKDIR = Path.home() / "cwf_agentic" / "swebench"
 
 
 def parse_args() -> argparse.Namespace:
+    if not _SETUP_MARKER.exists():
+        print(
+            "[ERROR] Setup not complete. Run first:\n"
+            "        python3 benchmarks/swe-bench/setup.py",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     p = argparse.ArgumentParser(
         description="SWE-bench evaluation runner for CWF",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

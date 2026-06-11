@@ -146,8 +146,14 @@ def main() -> None:
     if not args.skip_post_install:
         post_install(args.conda_env, args.dry_run)
     log("AppWorld setup complete.", "ok")
+    if not args.dry_run:
+        setup_marker = Path(__file__).resolve().parent / ".setup_complete"
+        setup_marker.write_text(f"AppWorld setup completed successfully\nconda_env: {args.conda_env}\n")
+        log(f"Setup marker written: {setup_marker}", "ok")
     print(f"\n  Next: conda activate {args.conda_env}")
     print( "        python3 benchmarks/appworld/run.py")
+    print("\n[SUCCESS] AppWorld setup complete")
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()

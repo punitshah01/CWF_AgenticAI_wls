@@ -14,6 +14,7 @@ Key additions vs base pnpwls:
 """
 
 import argparse
+import io
 import logging
 import os
 import sys

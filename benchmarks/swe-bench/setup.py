@@ -148,8 +148,14 @@ def main() -> None:
     if not args.skip_validate:
         validate(args.conda_env, args.dry_run)
     log("SWE-bench setup complete.", "ok")
+    if not args.dry_run:
+        setup_marker = Path(__file__).resolve().parent / ".setup_complete"
+        setup_marker.write_text(f"SWE-bench setup completed successfully\nconda_env: {args.conda_env}\n")
+        log(f"Setup marker written: {setup_marker}", "ok")
     print(f"\n  Next: conda activate {args.conda_env}")
     print( "        python3 benchmarks/swe-bench/run.py")
+    print("\n[SUCCESS] SWE-bench setup complete")
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()

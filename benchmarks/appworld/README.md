@@ -1,111 +1,105 @@
-# AppWorld — Quick Start
-
-> **Stony Brook NLP | ACL 2024 Best Resource | 750 multi-app tasks**  
-> Tests agents that coordinate across 9 real-world apps via 457 API endpoints.
-
----
+﻿# AppWorld
 
 ## Overview
+Evaluates agents that coordinate across 9 real-world apps (Amazon, Spotify, Gmail, Google Calendar, Venmo, Phone, Notes, File Manager, Supervisor) via 457 API endpoints. Tasks require multi-step reasoning: e.g., "book a flight and add it to my calendar". Primary KPI: `task_completion_rate` (tgc/sgc scores).
 
-| Property | Value |
+Upstream: https://github.com/StonyBrookNLP/appworld
+
+---
+
+## Prerequisites
+
+| Item | Requirement |
 |---|---|
-| Upstream | github.com/StonyBrookNLP/appworld |
-| Paper | arxiv.org/abs/2407.18901 |
-| Tasks | 750 (dev + test_normal + test_challenge) |
-| Apps | Amazon, Spotify, Gmail, Google Calendar, Venmo, Phone, Supervisor, Notes, File Manager |
-| APIs | 457 endpoints |
-| Environment | Python microservices (in-memory DBs) |
-| Primary KPI | `task_completion_rate` — % of tasks fully solved |
-| Secondary KPI | SGC (Soft Goal Completion) score |
-| RAM | ~2–4 GB per instance |
-| Storage | ~10 GB |
+| OS | CentOS Stream 9 / RHEL 9 (x86_64) |
+| Python | **3.11+** (hard requirement from AppWorld) |
+| Conda | Miniconda or Anaconda |
+| RAM | 16 GB+ |
+| Disk | ~10 GB |
+| Network | First run only (pip, appworld data download) |
 
 ---
 
-## CWF Setup
+## Setup
 
-```python
+```bash
 python3 benchmarks/appworld/setup.py
-# options:
-python3 benchmarks/appworld/setup.py --dry-run
-python3 benchmarks/appworld/setup.py --skip-post-install
 ```
 
-What it does:
-1. `pip install appworld` (Python 3.11+ required)
-2. `appworld install` — downloads data bundles (~2-3 min)
-3. `appworld download data`
-4. `appworld verify tests && appworld verify tasks`
+**Options:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--conda-env` | `appworld` | Conda environment name |
+| `--skip-post-install` | off | Skip `appworld install/download/verify` |
+| `--dry-run` | off | Print commands without executing |
+
+**Expected output on success:**
+```
+[SUCCESS] AppWorld setup complete
+```
+
+A `.setup_complete` marker is written to `benchmarks/appworld/` on success.
 
 ---
 
-## Run
+## Running
 
-### 1. Start LLM server
-AppWorld is lightweight — 8B model is sufficient for pipeline validation:
-```python
-python3 scripts/inference/start_llamacpp.py --model 8b --cores 64
+```bash
+python3 benchmarks/appworld/run.py --model 70b --dataset test_normal
 ```
 
-### 2. Run — integrated runner:
-```python
-# Quick dev validation
-python3 benchmarks/appworld/run.py --model 8b --dataset dev
+**All flags:**
 
-# Full test_normal
-python3 benchmarks/appworld/run.py --model 32b --dataset test_normal --inference-cores 96
+| Flag | Default | Description |
+|---|---|---|
+| `--model` | `8b` | LLM preset: `8b`, `32b`, `70b` |
+| `--inference-cores` | `64` | CPU cores for LLM inference |
+| `--env-cores` | `8` | CPU cores per AppWorld instance |
+| `--num-instances` | `1` | Parallel agent instances |
+| `--dataset` | `dev` | `dev`, `test_normal`, `test_challenge` |
+| `--agent` | `simplified_function_calling_agent` | Agent implementation |
+| `--llm-port` | `8000` | LLM API port |
+| `--collect-emon` | off | Enable EMON telemetry |
+| `--collect-rapl` | on | Enable RAPL power monitoring |
+| `--dry-run` | off | Print config without running |
 
-# Hard tasks
-python3 benchmarks/appworld/run.py --model 32b --dataset test_challenge
-
-# Multi-instance (4 parallel agents)
-python3 benchmarks/appworld/run.py --dataset test_normal --num-instances 4
-
-# Dry-run
-python3 benchmarks/appworld/run.py --dry-run
-```
-
-Or manual:
-```python
-export OPENAI_BASE_URL="http://localhost:8000/v1"
-export OPENAI_API_KEY="not-needed"
-conda activate agentic
-appworld run auto \
-    --agent-name simplified_function_calling_agent \
-    --model-name local-llm \
-    --dataset-name test_normal
-appworld evaluate cwf_baseline test_normal
-```
+**Results saved to:** `results/appworld/appworld_{model}_{dataset}_{timestamp}/`
 
 ---
 
-## Multi-Instance Scaling on CWF
+## Error Reference
 
-AppWorld's Python server is very lightweight. Scale to 4–8 instances easily:
+| Error Message | Cause | Fix |
+|---|---|---|
+| `Setup not complete. Run setup.py first` | `.setup_complete` marker missing | Run `python3 benchmarks/appworld/setup.py` |
+| `Python 3.11+ required` | Wrong Python version | Use conda env: `conda activate appworld` |
+| `appworld: command not found` | Package not installed | Re-run `setup.py` |
+| `APPWORLD_ROOT not set` | Missing env var | `export APPWORLD_ROOT=~/cwf_agentic/appworld` |
 
-```python
-# Automatic multi-instance via run.py:
-python3 benchmarks/appworld/run.py --dataset test_normal --num-instances 4
+---
+
+## Troubleshooting
+
+**Verify installation:**
+```bash
+conda activate appworld
+appworld verify tests
 ```
 
-| Instances | RAM | Env Cores | Expected Throughput |
-|---|---|---|---|
-| 1 | ~3 GB | 4 | Baseline |
-| 2 | ~6 GB | 8 | ~1.9× |
-| 4 | ~12 GB | 16 | ~3.5× |
-| 8 | ~24 GB | 32 | ~6× |
+**Expected scores:** 10–40% task_completion_rate with 70B model.
 
 ---
 
-## Config File
+## Results
 
-See [`configs/appworld.yaml`](../../configs/appworld.yaml).
+Output directory: `results/appworld/appworld_{model}_{dataset}_{timestamp}/`
 
----
+| File | Contents |
+|---|---|
+| `results.csv` | One row per run: tgc, sgc, num_tasks, runtime, power |
+| `results.json` | Structured JSON with system metadata |
+| `console_output.log` | Full stdout/stderr |
+| `telemetry/` | EMON EDP, RAPL samples |
 
-## Expected Results (CWF 32B Q4_K_M)
-
-| Dataset | Min | Target | Stretch |
-|---|---|---|---|
-| test_normal | 10% | 25%+ | 40%+ |
-| test_challenge | 5% | 15%+ | 25%+ |
+**KPIs:** `task_completion_rate` (tgc), `sgc`, `pkg_power_w`, `dram_power_w`

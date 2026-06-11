@@ -1,115 +1,101 @@
-# T-Bench — Quick Start
-
-> **Tool-Calling Benchmark — lightweight function-calling evaluation**  
-> Tests an agent's ability to select the right tool, extract parameters correctly, and complete multi-step workflows.
-
----
+﻿# T-Bench
 
 ## Overview
-
-| Property | Value |
-|---|---|
-| Environment | Mock REST API server |
-| Agent Type | Function-calling |
-| Primary KPI | `tool_accuracy` — % of tasks where correct tool is chosen |
-| Secondary KPIs | param_accuracy, workflow_completion, retry_rate |
-| RAM | ~1–2 GB |
-| Storage | Minimal (<1 GB) |
-| **Best for** | Fast iteration, LLM capability screening before heavier benchmarks |
+Evaluates LLM function-calling capability across 5 categories: tool selection, parameter extraction, multi-step workflows, error recovery, and workflow completion. Uses a mock REST API server (FastAPI on port 9000) to simulate real tool invocations. Primary KPI: `tool_accuracy` (% correct tool chosen).
 
 ---
 
-## Evaluation Dimensions
+## Prerequisites
 
-| Dimension | What It Measures |
+| Item | Requirement |
 |---|---|
-| Tool selection | Did agent choose the right tool for the task? |
-| Parameter extraction | Are input parameters correctly populated? |
-| Multi-step planning | Does agent correctly sequence multiple tool calls? |
-| Error recovery | Can agent detect and recover from tool errors? |
-| Workflow completion | Does end-to-end workflow reach the correct outcome? |
+| OS | CentOS Stream 9 / RHEL 9 (x86_64) |
+| Python | 3.10+ |
+| Conda | Miniconda or Anaconda |
+| RAM | 8 GB+ |
+| Disk | ~2 GB |
+| Network | First run only (pip packages) |
 
 ---
 
-## CWF Setup
+## Setup
 
-```python
+```bash
 python3 benchmarks/t-bench/setup.py
-# options:
-python3 benchmarks/t-bench/setup.py --dry-run
 ```
 
-What it does:
-1. Installs T-Bench Python packages (fastapi, uvicorn, requests, jsonschema, pytest)
-2. Creates mock REST server (`~/cwf_agentic/tbench/mock_server.py`) on first run
+**Options:**
 
----
-
-## Run
-
-### 1. Start LLM server
-T-Bench is very fast — 8B model is sufficient:
-```python
-python3 scripts/inference/start_llamacpp.py --model 8b --cores 64
-```
-
-### 2. Run — integrated runner:
-```python
-# Full evaluation (all categories)
-python3 benchmarks/t-bench/run.py --model 8b --inference-cores 64
-
-# Specific categories
-python3 benchmarks/t-bench/run.py --categories tool_selection param_extraction
-
-# Dry-run
-python3 benchmarks/t-bench/run.py --dry-run
-```
-
-### 2. Start mock API server
-```bash
-python ~/cwf_agentic/tbench/mock_server.py --port 8001 &
-# Verify: curl http://localhost:8001/health
-```
-
-### 3. Run evaluation
-```bash
-export OPENAI_BASE_URL="http://localhost:8000/v1"
-export TBENCH_SERVER="http://localhost:8001"
-python ~/cwf_agentic/tbench/run_eval.py
-```
-
-Results saved to `results/tbench/tbench_results.json`.
-
----
-
-## Inference Core Scaling Study
-
-T-Bench is fast enough to sweep inference cores systematically:
-
-```bash
-for CORES in 16 32 64 128; do
-    # Restart LLM server with $CORES, run eval, save to results/tbench/cores_${CORES}/
-    bash scripts/inference/start_llamacpp.sh --model 8b --cores $CORES &
-    sleep 30  # wait for server warmup
-    python ~/cwf_agentic/tbench/run_eval.py
-    pkill -f llama-server
-done
-```
-
----
-
-## Config File
-
-See [`configs/tbench.yaml`](../../configs/tbench.yaml).
-
----
-
-## Expected Results (CWF 8B Q4_K_M, 64 cores)
-
-| Metric | Min | Target |
+| Flag | Default | Description |
 |---|---|---|
-| tool_accuracy | 70% | 85%+ |
-| param_accuracy | 60% | 80%+ |
-| workflow_completion | 50% | 70%+ |
+| `--conda-env` | `tbench` | Conda environment name |
+| `--python-version` | `3.10` | Python version for conda env |
+| `--dry-run` | off | Print commands without executing |
 
-Use T-Bench results to screen model quality before running heavier SWE-bench / OSWorld runs.
+**Expected output on success:**
+```
+[SUCCESS] T-Bench setup complete
+```
+
+A `.setup_complete` marker is written to `benchmarks/t-bench/` on success.
+
+---
+
+## Running
+
+```bash
+python3 benchmarks/t-bench/run.py --model 8b --categories tool_selection param_extraction
+```
+
+**All flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--model` | `8b` | LLM preset: `8b`, `32b`, `70b` |
+| `--inference-cores` | `64` | CPU cores for LLM inference |
+| `--categories` | all 5 | Space-separated list of categories to run |
+| `--llm-port` | `8000` | LLM API port |
+| `--mock-port` | `9000` | FastAPI mock server port |
+| `--collect-emon` | off | Enable EMON telemetry |
+| `--collect-rapl` | on | Enable RAPL power monitoring |
+| `--dry-run` | off | Print config without running |
+
+**Available categories:** `tool_selection`, `param_extraction`, `multi_step`, `error_recovery`, `workflow_completion`
+
+**Results saved to:** `results/tbench/tbench_{model}_{timestamp}/`
+
+---
+
+## Error Reference
+
+| Error Message | Cause | Fix |
+|---|---|---|
+| `Setup not complete. Run setup.py first` | `.setup_complete` marker missing | Run `python3 benchmarks/t-bench/setup.py` |
+| `Connection refused on port 9000` | Mock server not started | Runner starts it automatically; check port conflict |
+| `Model does not support function calling` | LLM not function-call capable | Use Llama 3.1+ or a function-calling model |
+
+---
+
+## Troubleshooting
+
+**Check mock server:**
+```bash
+curl http://localhost:9000/health
+```
+
+**Expected scores:** 70–85% tool_accuracy with 70B model.
+
+---
+
+## Results
+
+Output directory: `results/tbench/tbench_{model}_{timestamp}/`
+
+| File | Contents |
+|---|---|
+| `results.csv` | One row per run: tool_accuracy, param_accuracy, workflow_complete |
+| `results.json` | Structured JSON with per-category breakdown |
+| `console_output.log` | Full stdout/stderr |
+| `telemetry/` | EMON EDP, RAPL samples |
+
+**KPIs:** `tool_accuracy` (primary), `param_accuracy`, `workflow_completion`, `pkg_power_w`

@@ -220,8 +220,14 @@ def main() -> None:
     install_packages(args.conda_env, args.dry_run)
     clone_osworld(args.dry_run)
     log("OSWorld setup complete.", "ok")
+    if not args.dry_run:
+        setup_marker = Path(__file__).resolve().parent / ".setup_complete"
+        setup_marker.write_text(f"OSWorld setup completed successfully\nconda_env: {args.conda_env}\n")
+        log(f"Setup marker written: {setup_marker}", "ok")
     print(f"\n  Next: conda activate {args.conda_env}")
     print( "        python3 benchmarks/osworld/run.py")
+    print("\n[SUCCESS] OSWorld setup complete")
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()

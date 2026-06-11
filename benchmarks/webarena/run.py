@@ -39,6 +39,15 @@ import signal
 import subprocess
 import sys
 import time
+import warnings
+
+# Suppress beartype PEP 585 deprecation warnings from third-party dependencies
+# (gymnasium uses typing.Mapping[...] instead of collections.abc.Mapping[...]).
+try:
+    from beartype.roar import BeartypeDecorHintPep585DeprecationWarning
+    warnings.filterwarnings("ignore", category=BeartypeDecorHintPep585DeprecationWarning)
+except ImportError:
+    pass
 
 if sys.version_info < (3, 10):
     sys.exit(f"[ERROR] Python 3.10+ required. Current: {sys.version.split()[0]}")
@@ -61,6 +70,7 @@ from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_
 BENCHMARK = "webarena"
 BENCHMARK_DIR = Path(__file__).resolve().parent
 WORKDIR = Path.home() / "cwf_agentic" / "webarena"
+_SETUP_MARKER = BENCHMARK_DIR / ".setup_complete"
 
 # ── Global state for signal-handler cleanup (mirrors pnpwls pattern) ─────────
 _TELEMETRY_MANAGER = None
@@ -92,6 +102,13 @@ signal.signal(signal.SIGTERM, _signal_handler)
 
 
 def parse_args() -> argparse.Namespace:
+    if not _SETUP_MARKER.exists():
+        print(
+            "[ERROR] Setup not complete. Run first:\n"
+            "        python3 benchmarks/webarena/setup.py",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     p = argparse.ArgumentParser(
         description="WebArena evaluation runner for CWF",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

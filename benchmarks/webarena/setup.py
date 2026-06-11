@@ -35,7 +35,16 @@ import shutil
 import subprocess
 import sys
 import time
+import warnings
 from pathlib import Path
+
+# Suppress beartype PEP 585 deprecation warnings from third-party dependencies
+# (gymnasium uses typing.Mapping[...] instead of collections.abc.Mapping[...]).
+try:
+    from beartype.roar import BeartypeDecorHintPep585DeprecationWarning
+    warnings.filterwarnings("ignore", category=BeartypeDecorHintPep585DeprecationWarning)
+except ImportError:
+    pass
 
 # WebArena itself requires Python 3.10+ at runtime, but the setup script
 # can be run with Python 3.9 — it will install python3.11 via dnf and use that.
@@ -336,23 +345,33 @@ def clone_webarena(venv_path: str, dry_run: bool) -> Path:
     venv_pip = str(Path(venv_path) / "bin" / "pip")
     run(f"{venv_pip} install -e {WORKDIR}", dry_run=dry_run)
 
-    # Patch tokenizer to handle non-OpenAI model names (Ollama/local models)
+    # Patch tokenizer to handle non-OpenAI model names (Ollama/local models).
+    # Uses regex to be indentation-agnostic — the upstream file may vary.
     tokenizer_file = WORKDIR / "llms" / "tokenizers.py"
     if tokenizer_file.exists() and not dry_run:
+        import re
         content = tokenizer_file.read_text()
-        old = "            self.tokenizer = tiktoken.encoding_for_model(model_name)"
-        new = (
-            "            try:\n"
-            "                self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
-            "            except KeyError:\n"
-            '                self.tokenizer = tiktoken.get_encoding("cl100k_base")'
+        # Match the assignment line regardless of leading whitespace, but only
+        # if it is NOT already inside a try/except block.
+        pattern = re.compile(
+            r'^( +)(self\.tokenizer = tiktoken\.encoding_for_model\(model_name\))\s*$',
+            re.MULTILINE,
         )
-        if old in content:
-            content = content.replace(old, new)
+        if pattern.search(content) and "except KeyError" not in content:
+            def _wrap_in_try(m):
+                indent = m.group(1)
+                base = indent[:-4] if len(indent) >= 4 else indent
+                return (
+                    f"{base}try:\n"
+                    f"{indent}self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
+                    f"{base}except KeyError:\n"
+                    f'{indent}self.tokenizer = tiktoken.get_encoding("cl100k_base")'
+                )
+            content = pattern.sub(_wrap_in_try, content)
             tokenizer_file.write_text(content)
             log("Patched tokenizers.py for local model compatibility", "ok")
         else:
-            log("tokenizers.py already patched or different format", "ok")
+            log("tokenizers.py already patched or pattern not matched", "ok")
 
     log(f"WebArena repo ready at {WORKDIR}", "ok")
     return WORKDIR
@@ -653,32 +672,41 @@ def validate_services(host: str, include_gitlab: bool, dry_run: bool) -> bool:
     poll_interval = 10
 
     for name, port in services:
-        url = f"http://{host}:{port}"
-        deadline = time.time() + max_wait
+        # Use localhost for Docker container health checks (ports are mapped to 127.0.0.1)
+        url = f"http://localhost:{port}"
+        start_time = time.time()
+        deadline = start_time + max_wait
         code = 0
         attempt = 0
+        printed_header = False
         while time.time() < deadline:
             attempt += 1
             try:
                 req = urllib.request.Request(url, method="GET")
-                resp = urllib.request.urlopen(req, timeout=10)
+                resp = urllib.request.urlopen(req, timeout=5)
                 code = resp.getcode()
                 if code in (200, 302):
+                    elapsed = int(time.time() - start_time)
+                    status = "ok"
+                    log(f"  {name:12s} ({port}): HTTP {code} [{elapsed}s]", status)
                     break
-            except Exception:
+            except Exception as e:
                 code = 0
-            elapsed = int(time.time() - (deadline - max_wait))
-            if attempt == 1:
+            
+            elapsed = int(time.time() - start_time)
+            if not printed_header:
                 log(f"  {name:12s} ({port}): waiting for service to be ready ...", "info")
+                printed_header = True
             else:
                 print(f"  [{elapsed:3d}s] {name} not ready yet (HTTP {code}) — retrying ...",
                       flush=True)
             time.sleep(poll_interval)
 
-        status = "ok" if code in (200, 302) else "error"
-        if status == "error":
+        if code not in (200, 302):
             all_ok = False
-        log(f"  {name:12s} ({port}): HTTP {code}", status)
+            elapsed = int(time.time() - start_time)
+            status = "error"
+            log(f"  {name:12s} ({port}): HTTP {code} timeout after {elapsed}s", status)
 
     if all_ok:
         log("All services healthy!", "ok")
@@ -800,8 +828,21 @@ def main() -> None:
     print(f"      --result_dir results/run_01")
     print()
     print(f"  Full run (812 tasks) via CWF runner:")
-    print(f"    bash {REPO_ROOT}/benchmarks/webarena/run_webarena.sh --model {args.model.split(':')[0]} --collect-emon")
+    print(f"    python3 {REPO_ROOT}/benchmarks/webarena/run_webarena.py --model {args.model.split(':')[0]} --collect-emon")
     print()
+
+    # Write .setup_complete marker so run.py can verify setup was done
+    if not args.dry_run:
+        setup_marker = Path(__file__).resolve().parent / ".setup_complete"
+        setup_marker.write_text(
+            f"WebArena setup completed successfully\n"
+            f"Host: {host}\n"
+            f"Model: {args.model}\n"
+        )
+        log(f"Setup marker written: {setup_marker}", "ok")
+
+    log("WebArena setup complete!", "ok")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
