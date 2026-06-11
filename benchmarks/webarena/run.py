@@ -40,6 +40,7 @@ import subprocess
 import sys
 import time
 import warnings
+from pathlib import Path
 
 # Suppress beartype PEP 585 deprecation warnings from third-party dependencies
 # (gymnasium uses typing.Mapping[...] instead of collections.abc.Mapping[...]).
@@ -49,11 +50,34 @@ try:
 except ImportError:
     pass
 
-if sys.version_info < (3, 10):
-    sys.exit(f"[ERROR] Python 3.10+ required. Current: {sys.version.split()[0]}")
+WORKDIR = Path.home() / "cwf_agentic" / "webarena"
+WEBARENA_VENV_PYTHON = Path.home() / "webarena_venv" / "bin" / "python"
+
+
+def _ensure_supported_python() -> None:
+    """Re-exec with the setup-created venv if the current interpreter is too old."""
+    if sys.version_info >= (3, 10):
+        return
+
+    fallback_python = WEBARENA_VENV_PYTHON
+    if fallback_python.exists() and Path(sys.executable).resolve() != fallback_python.resolve():
+        print(
+            f"[INFO] Python {sys.version.split()[0]} detected; re-launching with {fallback_python}",
+            file=sys.stderr,
+        )
+        os.execv(str(fallback_python), [str(fallback_python), str(Path(__file__).resolve()), *sys.argv[1:]])
+
+    sys.exit(
+        "[ERROR] Python 3.10+ required. "
+        f"Current: {sys.version.split()[0]}. "
+        "Run 'source ~/activate_webarena.sh' or re-run setup.py to create ~/webarena_venv."
+    )
+
+
+_ensure_supported_python()
+
 from collections import OrderedDict
 from datetime import datetime
-from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -69,7 +93,6 @@ from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_
 
 BENCHMARK = "webarena"
 BENCHMARK_DIR = Path(__file__).resolve().parent
-WORKDIR = Path.home() / "cwf_agentic" / "webarena"
 _SETUP_MARKER = BENCHMARK_DIR / ".setup_complete"
 
 # ── Global state for signal-handler cleanup (mirrors pnpwls pattern) ─────────
