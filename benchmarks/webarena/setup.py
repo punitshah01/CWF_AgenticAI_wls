@@ -860,9 +860,10 @@ def main() -> None:
             "# Usage: source ~/activate_webarena.sh\n"
             f"source {Path.home()}/.cwf_webarena_env\n"
             f"source {venv_path}/bin/activate\n"
-            f"cd {WORKDIR}\n"
+            f"cd {REPO_ROOT}\n"
             f'echo "[ OK ] WebArena env ready. Venv: {venv_path}"\n'
-            f'echo "[ OK ] Working dir: {WORKDIR}"\n'
+            f'echo "[ OK ] Working dir: {REPO_ROOT}"\n'
+            f'echo "[ OK ] Upstream WebArena clone: {WORKDIR}"\n'
         )
         activate_script.chmod(0o755)
     log(f"Activation script written: {activate_script}", "ok")
