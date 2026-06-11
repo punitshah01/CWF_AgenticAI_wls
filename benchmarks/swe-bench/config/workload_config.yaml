@@ -1,0 +1,93 @@
+# SWE-bench Workload Configuration
+# Note: Shared telemetry paths are in common/telemetry/telemetry_config.yaml
+# Mirrors pnpwls/{workload}/config/workload_config.yaml pattern exactly.
+
+# ============================================================================
+# LLM / Inference Configuration
+# ============================================================================
+models:
+  8b:
+    llamacpp_model: "llama3-8b"
+    default_port: 8000
+    recommended_cores: 64
+  32b:
+    llamacpp_model: "llama3-32b"
+    default_port: 8000
+    recommended_cores: 96
+  70b:
+    llamacpp_model: "llama3-70b"
+    default_port: 8000
+    recommended_cores: 144
+
+# ============================================================================
+# Workload Defaults
+# ============================================================================
+workload:
+  name: "swebench"
+  description: "Software engineering benchmark — LLM solves real GitHub issues"
+  default_model: "32b"
+  default_inference_cores: 96
+  default_env_cores: 32
+  default_max_workers: 8          # parallel Docker eval containers
+  default_split: "lite"           # lite | verified | full
+  default_llm_port: 8000
+  # BKM: max_workers = min(int(0.75 * nproc), 24)
+  bkm_max_workers_formula: "min(int(0.75 * nproc), 24)"
+
+# ============================================================================
+# Dataset / Split Configuration
+# ============================================================================
+splits:
+  lite:
+    hf_dataset: "SWE-bench/SWE-bench_Lite"
+    num_instances: 300
+    description: "300-task lite split — use for initial validation"
+    estimated_duration_h: 1
+  verified:
+    hf_dataset: "SWE-bench/SWE-bench_Verified"
+    num_instances: 500
+    description: "500 human-verified tasks"
+    estimated_duration_h: 3
+  full:
+    hf_dataset: "SWE-bench/SWE-bench"
+    num_instances: 2294
+    description: "Full 2294-task benchmark — requires large disk and long runtime"
+    estimated_duration_h: 16
+
+# ============================================================================
+# Docker Configuration (SWE-bench uses one container per task)
+# ============================================================================
+container:
+  base_image: "swebench/sweb.base.x86_64:latest"
+  eval_image_prefix: "swebench/sweb.eval.x86_64"
+  network: "host"
+  auto_remove: true
+
+# ============================================================================
+# Output Files
+# ============================================================================
+output_files:
+  results_csv:    "results.csv"
+  results_json:   "results.json"
+  predictions:    "predictions/{run_id}.jsonl"
+  console_log:    "console_output.log"
+
+# ============================================================================
+# Telemetry Settings
+# ============================================================================
+telemetry:
+  collect_emon:           false
+  collect_rapl:           true
+  collect_temp:           false
+  emon_warmup_s:          60
+  emon_duration_s:        180
+  skip_emon_processing:   false
+
+# ============================================================================
+# EMON Processing Configuration
+# ============================================================================
+emon:
+  begin_sample:  700
+  dirty_samples: 400
+  views:
+    - socket-view

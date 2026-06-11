@@ -1,0 +1,136 @@
+name: Action - Start Benchmark Run
+run-name: Run ${{ github.event.inputs.workload }} on ${{ github.event.inputs.sut_name }} by ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sut_name:
+        description: 'SUT hostname'
+        default: 'unknown'
+        required: true
+      workload:
+        description: 'Benchmark to run'
+        type: choice
+        options:
+          - webarena
+          - appworld
+          - osworld
+          - swe-bench
+          - t-bench
+          - all
+        default: 'webarena'
+        required: true
+      model:
+        description: 'LLM model size'
+        type: choice
+        options:
+          - 8b
+          - 32b
+          - 70b
+        default: '8b'
+        required: true
+      inference_cores:
+        description: 'CPU cores for LLM inference'
+        default: '96'
+        required: true
+      collect_emon:
+        description: 'Collect EMON telemetry'
+        type: boolean
+        default: 'false'
+        required: true
+      dry_run:
+        description: 'Dry run (print config, do not execute)'
+        type: boolean
+        default: 'false'
+        required: false
+      run_id:
+        description: 'Custom run ID label (leave blank for auto)'
+        default: ''
+        required: false
+
+jobs:
+  Run-Benchmark:
+    runs-on: ${{ github.event.inputs.sut_name }}
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@v4.1.4
+      with:
+        fetch-depth: 1
+
+    - name: Print Run Parameters
+      run: |
+        echo "workload:        ${{ github.event.inputs.workload }}"
+        echo "model:           ${{ github.event.inputs.model }}"
+        echo "inference_cores: ${{ github.event.inputs.inference_cores }}"
+        echo "collect_emon:    ${{ github.event.inputs.collect_emon }}"
+        echo "dry_run:         ${{ github.event.inputs.dry_run }}"
+        echo "run_id:          ${{ github.event.inputs.run_id }}"
+        echo "git_branch:      ${GITHUB_REF##*/}"
+
+    - name: System info snapshot
+      run: |
+        lscpu | head -30
+        free -h
+        df -h $GITHUB_WORKSPACE
+
+    - name: Run WebArena
+      if: github.event.inputs.workload == 'webarena' || github.event.inputs.workload == 'all'
+      run: |
+        EMON_FLAG=${{ github.event.inputs.collect_emon == 'true' && '--collect-emon' || '' }}
+        DRY_FLAG=${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        RUN_ID=${{ github.event.inputs.run_id != '' && format('--run-id {0}', github.event.inputs.run_id) || '' }}
+        python3 benchmarks/webarena/run.py \
+          --model ${{ github.event.inputs.model }} \
+          --inference-cores ${{ github.event.inputs.inference_cores }} \
+          $EMON_FLAG $DRY_FLAG $RUN_ID
+
+    - name: Run AppWorld
+      if: github.event.inputs.workload == 'appworld' || github.event.inputs.workload == 'all'
+      run: |
+        EMON_FLAG=${{ github.event.inputs.collect_emon == 'true' && '--collect-emon' || '' }}
+        DRY_FLAG=${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        python3 benchmarks/appworld/run.py \
+          --model ${{ github.event.inputs.model }} \
+          --inference-cores ${{ github.event.inputs.inference_cores }} \
+          $EMON_FLAG $DRY_FLAG
+
+    - name: Run OSWorld
+      if: github.event.inputs.workload == 'osworld' || github.event.inputs.workload == 'all'
+      run: |
+        EMON_FLAG=${{ github.event.inputs.collect_emon == 'true' && '--collect-emon' || '' }}
+        DRY_FLAG=${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        python3 benchmarks/osworld/run.py \
+          --model ${{ github.event.inputs.model }} \
+          --inference-cores ${{ github.event.inputs.inference_cores }} \
+          $EMON_FLAG $DRY_FLAG
+
+    - name: Run SWE-bench
+      if: github.event.inputs.workload == 'swe-bench' || github.event.inputs.workload == 'all'
+      run: |
+        EMON_FLAG=${{ github.event.inputs.collect_emon == 'true' && '--collect-emon' || '' }}
+        DRY_FLAG=${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        python3 benchmarks/swe-bench/run.py \
+          --model ${{ github.event.inputs.model }} \
+          --inference-cores ${{ github.event.inputs.inference_cores }} \
+          $EMON_FLAG $DRY_FLAG
+
+    - name: Run T-Bench
+      if: github.event.inputs.workload == 't-bench' || github.event.inputs.workload == 'all'
+      run: |
+        EMON_FLAG=${{ github.event.inputs.collect_emon == 'true' && '--collect-emon' || '' }}
+        DRY_FLAG=${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        python3 benchmarks/t-bench/run.py \
+          --model ${{ github.event.inputs.model }} \
+          --inference-cores ${{ github.event.inputs.inference_cores }} \
+          $EMON_FLAG $DRY_FLAG
+
+    - name: Upload results artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: results-${{ github.event.inputs.workload }}-${{ github.run_id }}
+        path: results/
+        retention-days: 30

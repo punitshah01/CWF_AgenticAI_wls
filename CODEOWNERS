@@ -1,2 +1,25 @@
-# Default owner for all files in this repo
+# CODEOWNERS
+# Maps directory patterns to owning individuals/teams.
+# GitHub uses this to automatically request reviews.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
 * @punitshah01
+
+# Common utilities (any change here affects all 5 benchmarks — require careful review)
+/common/                @punitshah01
+
+# Per-workload runners
+/benchmarks/webarena/   @punitshah01
+/benchmarks/appworld/   @punitshah01
+/benchmarks/osworld/    @punitshah01
+/benchmarks/swe-bench/  @punitshah01
+/benchmarks/t-bench/    @punitshah01
+
+# CI/CD workflows
+/.github/workflows/     @punitshah01
+
+# Setup and infrastructure scripts
+/setup/                 @punitshah01
+/scripts/               @punitshah01
+

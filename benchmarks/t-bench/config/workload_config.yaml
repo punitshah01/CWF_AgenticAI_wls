@@ -1,0 +1,97 @@
+# T-Bench Workload Configuration
+# Note: Shared telemetry paths are in common/telemetry/telemetry_config.yaml
+# Mirrors pnpwls/{workload}/config/workload_config.yaml pattern exactly.
+
+# ============================================================================
+# LLM / Inference Configuration
+# ============================================================================
+models:
+  8b:
+    ollama_model: "llama3:8b"
+    llamacpp_model: "llama3-8b"
+    default_port: 8000
+    recommended_cores: 64
+  32b:
+    llamacpp_model: "llama3-32b"
+    default_port: 8000
+    recommended_cores: 96
+  70b:
+    llamacpp_model: "llama3-70b"
+    default_port: 8000
+    recommended_cores: 144
+
+# ============================================================================
+# Workload Defaults
+# ============================================================================
+workload:
+  name: "tbench"
+  description: "T-Bench — function-calling evaluation for LLM tool use"
+  default_model: "8b"
+  default_inference_cores: 64
+  default_llm_port: 8000
+  default_mock_port: 9000         # FastAPI mock REST server
+  default_categories:             # all 5 by default; subset with --categories
+    - tool_selection
+    - param_extraction
+    - multi_step
+    - error_recovery
+    - workflow_completion
+
+# ============================================================================
+# Evaluation Categories
+# ============================================================================
+categories:
+  tool_selection:
+    description: "Select the correct tool from a list of candidates"
+    num_tasks: 100
+  param_extraction:
+    description: "Extract correct parameters for a given tool call"
+    num_tasks: 150
+  multi_step:
+    description: "Chain multiple tool calls to complete a task"
+    num_tasks: 100
+  error_recovery:
+    description: "Recover from failed tool calls gracefully"
+    num_tasks: 75
+  workflow_completion:
+    description: "Complete a multi-turn workflow with tool use"
+    num_tasks: 75
+
+# ============================================================================
+# Mock Server Configuration (FastAPI)
+# ============================================================================
+mock_server:
+  port: 9000
+  host: "0.0.0.0"
+  startup_timeout_s: 10
+  required_packages:
+    - fastapi
+    - uvicorn
+
+# ============================================================================
+# Output Files
+# ============================================================================
+output_files:
+  results_csv:  "results.csv"
+  results_json: "results.json"
+  console_log:  "console_output.log"
+
+# ============================================================================
+# Telemetry Settings
+# ============================================================================
+telemetry:
+  collect_emon:           false
+  collect_rapl:           true
+  collect_temp:           false
+  emon_warmup_s:          60
+  emon_duration_s:        180
+  skip_emon_processing:   false
+
+# ============================================================================
+# EMON Processing Configuration
+# ============================================================================
+emon:
+  begin_sample:  700
+  dirty_samples: 400
+  views:
+    - socket-view

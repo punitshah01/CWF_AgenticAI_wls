@@ -1,0 +1,95 @@
+name: Action - Fetch Result Files
+run-name: Fetch results from ${{ github.event.inputs.sut_name }} by ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sut_name:
+        description: 'SUT hostname'
+        default: 'unknown'
+        required: true
+      run_id:
+        description: 'Run ID to fetch (leave blank for all recent)'
+        default: ''
+        required: false
+      workload:
+        description: 'Filter by workload (leave blank for all)'
+        type: choice
+        options:
+          - ''
+          - webarena
+          - appworld
+          - osworld
+          - swe-bench
+          - t-bench
+        default: ''
+        required: false
+      results_base_path:
+        description: 'Path to results directory on SUT'
+        default: '/root/CWF_AgenticAI_wls/results'
+        required: true
+
+jobs:
+  Fetch-Files:
+    runs-on: ${{ github.event.inputs.sut_name }}
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@v4.1.4
+      with:
+        fetch-depth: 1
+
+    - name: List available results
+      run: |
+        RESULTS_DIR="${{ github.event.inputs.results_base_path }}"
+        WL="${{ github.event.inputs.workload }}"
+        RUN_ID="${{ github.event.inputs.run_id }}"
+        
+        if [ -n "$WL" ]; then
+          RESULTS_DIR="${RESULTS_DIR}/${WL}"
+        fi
+        
+        echo "Listing results in: ${RESULTS_DIR}"
+        ls -lth "${RESULTS_DIR}" 2>/dev/null | head -30 || echo "No results found"
+
+    - name: Collect result files
+      run: |
+        RESULTS_DIR="${{ github.event.inputs.results_base_path }}"
+        RUN_ID="${{ github.event.inputs.run_id }}"
+        WL="${{ github.event.inputs.workload }}"
+        DEST="${GITHUB_WORKSPACE}/collected_results"
+        
+        mkdir -p "${DEST}"
+        
+        if [ -n "$RUN_ID" ]; then
+          # Specific run
+          find "${RESULTS_DIR}" -name "${RUN_ID}" -type d 2>/dev/null | while read -r dir; do
+            cp -r "${dir}" "${DEST}/"
+          done
+        elif [ -n "$WL" ]; then
+          # All runs for a workload
+          cp -r "${RESULTS_DIR}/${WL}" "${DEST}/" 2>/dev/null || echo "No results for ${WL}"
+        else
+          # Last 5 runs per workload
+          for wl in webarena appworld osworld swe-bench t-bench; do
+            WL_DIR="${RESULTS_DIR}/${wl}"
+            if [ -d "${WL_DIR}" ]; then
+              mkdir -p "${DEST}/${wl}"
+              ls -t "${WL_DIR}" | head -5 | while read -r run; do
+                cp -r "${WL_DIR}/${run}" "${DEST}/${wl}/"
+              done
+            fi
+          done
+        fi
+        
+        echo "Collected results:"
+        find "${DEST}" -name "results.csv" -o -name "results.json" | head -20
+
+    - name: Upload collected results
+      uses: actions/upload-artifact@v4
+      with:
+        name: cwf-results-${{ github.run_id }}
+        path: collected_results/
+        retention-days: 90

@@ -1,0 +1,99 @@
+# WebArena Workload Configuration
+# Note: Shared telemetry paths are in common/telemetry/telemetry_config.yaml
+# Note: Docker registry settings are in common/config/docker_config.yaml
+# Mirrors pnpwls/{workload}/config/workload_config.yaml pattern exactly.
+
+# ============================================================================
+# LLM / Inference Configuration
+# ============================================================================
+models:
+  8b:
+    ollama_model: "llama3:8b"
+    llamacpp_model: "llama3-8b"
+    default_port: 11434      # Ollama
+    recommended_cores: 48
+  32b:
+    ollama_model: "llama3:32b"
+    llamacpp_model: "llama3-32b"
+    default_port: 11434
+    recommended_cores: 96
+  70b:
+    ollama_model: "llama3:70b"
+    llamacpp_model: "llama3-70b"
+    default_port: 11434
+    recommended_cores: 144
+
+# ============================================================================
+# Workload Defaults (overridable via CLI)
+# ============================================================================
+workload:
+  name: "webarena"
+  description: "Web agent evaluation — LLM + Playwright against live web services"
+  default_model: "8b"
+  default_inference_cores: 96
+  default_env_cores: 48         # Playwright workers + Docker services
+  default_start_idx: 0
+  default_end_idx: 812          # full suite; use 0-50 for smoke test
+  default_llm_port: 11434       # Ollama default
+  max_tasks: 812
+
+# ============================================================================
+# Web Service Endpoints (must match running Docker containers)
+# ============================================================================
+services:
+  shopping:       "localhost:7770"
+  shopping_admin: "localhost:7780/admin"
+  reddit:         "localhost:9999"
+  gitlab:         "localhost:8023"
+  gitlab_enabled: false           # DISABLED — crashes on RHEL9/overlay2
+  wikipedia:      "localhost:8888/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing"
+  map:            "localhost:3000"
+
+# ============================================================================
+# Agent Configuration
+# ============================================================================
+agent:
+  instruction_path: "agent/prompts/jsons/p_cot_id_actree_2s.json"
+  temperature: 0.1
+  max_tokens: 512
+  provider: "openai"            # Uses OpenAI-compatible API
+
+# ============================================================================
+# Output Files
+# ============================================================================
+output_files:
+  results_csv:  "results.csv"
+  results_json: "results.json"
+  console_log:  "console_output.log"
+
+# ============================================================================
+# Telemetry Settings (mirrors pnpwls telemetry block)
+# CLI flags override these:
+#   collect_emon   -> --collect-emon / (default off)
+#   collect_rapl   -> --collect-rapl / (default on)
+#   collect_temp   -> --collect-temp / (default off)
+# ============================================================================
+telemetry:
+  collect_emon:           false
+  collect_rapl:           true
+  collect_temp:           false
+  emon_warmup_s:          60    # skip cold-start transient
+  emon_duration_s:        180   # 3-minute steady-state window
+  skip_emon_processing:   false # set true to keep raw .txt only
+
+# ============================================================================
+# EMON Processing Configuration
+# ============================================================================
+emon:
+  begin_sample:  700
+  dirty_samples: 400
+  views:
+    - socket-view             # always emitted
+
+# ============================================================================
+# CPU Topology Hints (CWF-specific)
+# ============================================================================
+topology:
+  inference_cores: "0-95"
+  env_cores: "96-143"         # Playwright + services
+  metrics_cores: "144-159"    # telemetry / monitoring

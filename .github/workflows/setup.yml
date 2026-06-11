@@ -1,0 +1,81 @@
+# Action — Setup CWF SUT
+
+name: Action - Setup CWF SUT
+run-name: CWF Setup on ${{ github.event.inputs.sut_name }} by ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sut_name:
+        description: 'SUT hostname (must be registered as a GitHub Actions runner)'
+        default: 'unknown'
+        required: true
+      base_path:
+        description: 'Base folder to store repo and outputs (e.g. /root)'
+        default: '/root'
+        required: true
+      setup_emon:
+        description: 'Install/configure Intel SEP/EMON'
+        type: boolean
+        default: 'true'
+        required: true
+      setup_docker:
+        description: 'Install Docker CE'
+        type: boolean
+        default: 'true'
+        required: true
+      cleanup_artifacts:
+        description: 'Delete old artifacts before fresh download'
+        type: boolean
+        default: 'false'
+        required: true
+
+jobs:
+  Setup-SUT:
+    runs-on: ${{ github.event.inputs.sut_name }}
+    defaults:
+      run:
+        working-directory: ${{ github.event.inputs.base_path }}
+
+    steps:
+    - uses: actions/checkout@v4.1.4
+      with:
+        fetch-depth: 1
+
+    - name: Print Input Parameters
+      if: runner.os == 'Linux'
+      run: |
+        echo "sut_name:    ${{ github.event.inputs.sut_name }}"
+        echo "base_path:   ${{ github.event.inputs.base_path }}"
+        echo "setup_emon:  ${{ github.event.inputs.setup_emon }}"
+        echo "git_branch:  ${GITHUB_REF##*/}"
+        echo "actor:       ${{ github.actor }}"
+
+    - name: Disk space info
+      if: runner.os == 'Linux'
+      run: |
+        available=$(df -hl ${{ github.event.inputs.base_path }} | tail -1 | awk '{print $4}')
+        echo "Available at ${{ github.event.inputs.base_path }}: ${available}"
+        df -hl
+
+    - name: Ensure Python 3
+      if: runner.os == 'Linux'
+      run: |
+        python3 --version || (dnf install -y python3 || apt-get install -y python3)
+
+    - name: Setup Docker
+      if: runner.os == 'Linux' && github.event.inputs.setup_docker == 'true'
+      run: python3 ${{ github.workspace }}/setup/setup_docker.py
+
+    - name: Setup EMON
+      if: runner.os == 'Linux' && github.event.inputs.setup_emon == 'true'
+      run: python3 ${{ github.workspace }}/setup/setup_emon.py
+
+    - name: Install Python dependencies
+      if: runner.os == 'Linux'
+      run: |
+        pip3 install pyyaml psutil docker requests 2>/dev/null || true
+
+    - name: Verify EMON
+      if: runner.os == 'Linux' && github.event.inputs.setup_emon == 'true'
+      run: python3 ${{ github.workspace }}/misc/check_emon_setup.py || echo "EMON check failed — check logs"

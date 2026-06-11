@@ -24,6 +24,8 @@ LLM server must be started separately:
 """
 
 import argparse
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -44,9 +46,38 @@ from common.system_metadata import get_system_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
+from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_config
 
 BENCHMARK = "tbench"
+BENCHMARK_DIR = Path(__file__).resolve().parent
 WORKDIR = Path.home() / "cwf_agentic" / "tbench"
+
+# ── Global state for signal-handler cleanup ───────────────────────────────────
+_TELEMETRY_MANAGER = None
+_CLEANUP_CALLED = False
+
+
+def _cleanup_on_exit() -> None:
+    global _TELEMETRY_MANAGER, _CLEANUP_CALLED
+    if _CLEANUP_CALLED:
+        return
+    _CLEANUP_CALLED = True
+    if _TELEMETRY_MANAGER is not None:
+        try:
+            print("\n[tbench] Stopping telemetry on interrupt …")
+            _TELEMETRY_MANAGER.stop(process_emon=False)
+        except Exception:
+            pass
+    teardown_logging()
+
+
+def _signal_handler(signum, frame):
+    _cleanup_on_exit()
+    sys.exit(130)
+
+
+signal.signal(signal.SIGINT,  _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
 
 ALL_CATEGORIES = [
     "tool_selection",

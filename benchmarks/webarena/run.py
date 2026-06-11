@@ -35,6 +35,7 @@ Arguments:
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -55,9 +56,39 @@ from common.system_metadata import get_system_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
+from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_config
 
 BENCHMARK = "webarena"
+BENCHMARK_DIR = Path(__file__).resolve().parent
 WORKDIR = Path.home() / "cwf_agentic" / "webarena"
+
+# ── Global state for signal-handler cleanup (mirrors pnpwls pattern) ─────────
+_TELEMETRY_MANAGER = None
+_CLEANUP_CALLED = False
+
+
+def _cleanup_on_exit() -> None:
+    """Stop telemetry gracefully on SIGINT/SIGTERM."""
+    global _TELEMETRY_MANAGER, _CLEANUP_CALLED
+    if _CLEANUP_CALLED:
+        return
+    _CLEANUP_CALLED = True
+    if _TELEMETRY_MANAGER is not None:
+        try:
+            print("\n[webarena] Stopping telemetry on interrupt …")
+            _TELEMETRY_MANAGER.stop(process_emon=False)
+        except Exception:
+            pass
+    teardown_logging()
+
+
+def _signal_handler(signum, frame):
+    _cleanup_on_exit()
+    sys.exit(130)
+
+
+signal.signal(signal.SIGINT,  _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
 
 
 def parse_args() -> argparse.Namespace:
@@ -192,83 +223,101 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
 
 
 def main() -> None:
+    global _TELEMETRY_MANAGER
+
     args = parse_args()
     run_id = build_run_id(args)
     out_dir = REPO_ROOT / "results" / BENCHMARK / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    cpu = CPUInfo()
-    os_info = OSInfo()
-    platform = detect_platform()
-
-    print(f"\n{'='*60}")
-    print("  WebArena Runner")
-    print(f"  Run ID    : {run_id}")
-    print(f"  Platform  : {platform}")
-    print(f"  Model     : {args.model}  Inf-cores: {args.inference_cores}")
-    print(f"  Tasks     : {args.start_idx}..{args.end_idx}")
-    print(f"  Output    : {out_dir}")
-    if args.collect_emon:
-        dur_label = f"{args.emon_duration}s" if args.emon_duration > 0 else "full run"
-        print(f"  EMON      : warmup={args.emon_warmup}s, collect {dur_label}")
-    print(f"{'='*60}\n")
-
-    sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
-                                   experiment_name=BENCHMARK)
-    emon_duration = args.emon_duration if args.emon_duration > 0 else None
-    tm = TelemetryManager(
-        output_dir=str(out_dir / "telemetry"),
-        platform=platform,
-        collect_emon=args.collect_emon,
-        collect_rapl=args.collect_rapl,
-        collect_temp=args.collect_temp,
-        emon_warmup_s=args.emon_warmup,
-        emon_duration_s=emon_duration,
-    )
+    # TeeOutput: mirror all stdout/stderr to console_output.log (pnpwls pattern)
     if not args.dry_run:
-        tm.start(session_name=run_id)
+        setup_tee_logging(out_dir / "console_output.log")
 
-    bench_results = run_evaluation(args, run_id)
+    try:
+        cpu = CPUInfo()
+        os_info = OSInfo()
+        platform = detect_platform()
 
-    if not args.dry_run:
-        print(f"\n[telemetry] Stopping collectors and processing EMON...")
-        tm.stop(process_emon=args.collect_emon, sockets=cpu.get_sockets())
-        print(f"[telemetry] Collection complete.")
+        print(f"\n{'='*60}")
+        print("  WebArena Runner")
+        print(f"  Run ID    : {run_id}")
+        print(f"  Platform  : {platform}")
+        print(f"  Model     : {args.model}  Inf-cores: {args.inference_cores}")
+        print(f"  Tasks     : {args.start_idx}..{args.end_idx}")
+        print(f"  Output    : {out_dir}")
+        if args.collect_emon:
+            dur_label = f"{args.emon_duration}s" if args.emon_duration > 0 else "full run"
+            print(f"  EMON      : warmup={args.emon_warmup}s, collect {dur_label}")
+        print(f"{'='*60}\n")
 
-    common_data: OrderedDict = OrderedDict()
-    common_data.update(bench_results)
-    common_data.update(sys_meta)
-    common_data["pkg_power_w"]  = str(tm.pkg_power_w)
-    common_data["dram_power_w"] = str(tm.dram_power_w)
+        sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
+                                       experiment_name=BENCHMARK)
+        emon_duration = args.emon_duration if args.emon_duration > 0 else None
+        tm = TelemetryManager(
+            output_dir=str(out_dir / "telemetry"),
+            platform=platform,
+            collect_emon=args.collect_emon,
+            collect_rapl=args.collect_rapl,
+            collect_temp=args.collect_temp,
+            emon_warmup_s=args.emon_warmup,
+            emon_duration_s=emon_duration,
+        )
+        _TELEMETRY_MANAGER = tm
 
-    write_csv_row(out_dir / "results.csv",
-                  list(common_data.keys()), list(common_data.values()))
-    rw = ResultsJsonWriter(output_dir=out_dir, run_id=run_id)
-    rw.add_row(common_data=common_data, rapl_data=tm.rapl_mean)
-    rw.save()
+        if not args.dry_run:
+            tm.start(session_name=run_id)
 
-    # Final Summary
-    print(f"\n{'='*70}")
-    print("  WebArena Run Summary")
-    print(f"{'='*70}")
-    print(f"  Run ID           : {run_id}")
-    print(f"  Tasks Completed  : {bench_results.get('tasks_completed', 'N/A')}/{bench_results.get('n_tasks', 'N/A')}")
-    print(f"  Success Rate     : {bench_results.get('success_rate', 'N/A')}%")
-    print(f"  Total Runtime    : {bench_results.get('total_runtime_s', 'N/A')}s")
-    print(f"\n  Power Metrics (RAPL):")
-    print(f"    Package Power  : {tm.pkg_power_w:.1f}W (mean)")
-    print(f"    DRAM Power     : {tm.dram_power_w:.1f}W (mean)")
-    if args.collect_emon:
-        print(f"\n  EMON Collection  : {tm.emon_ready}")
-        if tm.emon_output_dir:
-            print(f"    Output Dir     : {tm.emon_output_dir}")
-            csv_files = list(tm.emon_output_dir.glob("*.csv"))
-            if csv_files:
-                print(f"    CSV Files      : {len(csv_files)} generated")
-                for cf in csv_files[:3]:
-                    print(f"                   - {cf.name}")
-    print(f"\n  Results Location : {out_dir}")
-    print(f"{'='*70}\n")
+        bench_results = run_evaluation(args, run_id)
+
+        if not args.dry_run:
+            print(f"\n[telemetry] Stopping collectors and processing EMON...")
+            tm.stop(process_emon=args.collect_emon, sockets=cpu.get_sockets())
+            print(f"[telemetry] Collection complete.")
+
+        common_data: OrderedDict = OrderedDict()
+        common_data.update(bench_results)
+        common_data.update(sys_meta)
+        common_data["pkg_power_w"]  = str(tm.pkg_power_w)
+        common_data["dram_power_w"] = str(tm.dram_power_w)
+
+        write_csv_row(out_dir / "results.csv",
+                      list(common_data.keys()), list(common_data.values()))
+        rw = ResultsJsonWriter(output_dir=out_dir, run_id=run_id)
+        rw.add_row(common_data=common_data, rapl_data=tm.rapl_mean)
+        rw.save()
+
+        # Final Summary
+        print(f"\n{'='*70}")
+        print("  WebArena Run Summary")
+        print(f"{'='*70}")
+        print(f"  Run ID           : {run_id}")
+        print(f"  Tasks Completed  : {bench_results.get('tasks_completed', 'N/A')}/{bench_results.get('n_tasks', 'N/A')}")
+        print(f"  Success Rate     : {bench_results.get('success_rate', 'N/A')}%")
+        print(f"  Total Runtime    : {bench_results.get('total_runtime_s', 'N/A')}s")
+        print(f"\n  Power Metrics (RAPL):")
+        print(f"    Package Power  : {tm.pkg_power_w:.1f}W (mean)")
+        print(f"    DRAM Power     : {tm.dram_power_w:.1f}W (mean)")
+        if args.collect_emon:
+            print(f"\n  EMON Collection  : {tm.emon_ready}")
+            if tm.emon_output_dir:
+                print(f"    Output Dir     : {tm.emon_output_dir}")
+                csv_files = list(tm.emon_output_dir.glob("*.csv"))
+                if csv_files:
+                    print(f"    CSV Files      : {len(csv_files)} generated")
+                    for cf in csv_files[:3]:
+                        print(f"                   - {cf.name}")
+        print(f"\n  Results Location : {out_dir}")
+        print(f"{'='*70}\n")
+
+    except KeyboardInterrupt:
+        print("\n\n[webarena] Interrupted by user.")
+    except Exception as exc:
+        print(f"\n[webarena] Fatal error: {exc}")
+        import traceback; traceback.print_exc()
+        sys.exit(1)
+    finally:
+        teardown_logging()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,84 @@
+# AppWorld Workload Configuration
+# Note: Shared telemetry paths are in common/telemetry/telemetry_config.yaml
+# Mirrors pnpwls/{workload}/config/workload_config.yaml pattern exactly.
+
+# ============================================================================
+# LLM / Inference Configuration
+# ============================================================================
+models:
+  8b:
+    llamacpp_model: "llama3-8b"
+    default_port: 8000
+    recommended_cores: 64
+  32b:
+    llamacpp_model: "llama3-32b"
+    default_port: 8000
+    recommended_cores: 96
+  70b:
+    llamacpp_model: "llama3-70b"
+    default_port: 8000
+    recommended_cores: 144
+
+# ============================================================================
+# Workload Defaults
+# ============================================================================
+workload:
+  name: "appworld"
+  description: "Application agent evaluation — LLM + UI automation"
+  default_model: "8b"
+  default_inference_cores: 64
+  default_env_cores: 8            # per AppWorld instance
+  default_num_instances: 1        # parallel agent workers
+  default_dataset: "dev"          # dev | test_normal | test_challenge
+  default_agent: "simplified_function_calling_agent"
+  default_llm_port: 8000
+
+# ============================================================================
+# Dataset Configuration
+# ============================================================================
+datasets:
+  dev:
+    description: "Development split — small, for quick validation"
+    approximate_tasks: 100
+  test_normal:
+    description: "Standard test split"
+    approximate_tasks: 500
+  test_challenge:
+    description: "Challenge split — harder compositional tasks"
+    approximate_tasks: 200
+
+# ============================================================================
+# Available Agents
+# ============================================================================
+agents:
+  - simplified_function_calling_agent
+  - function_calling_agent
+  - chain_of_thought_agent
+
+# ============================================================================
+# Output Files
+# ============================================================================
+output_files:
+  results_csv:  "results.csv"
+  results_json: "results.json"
+  console_log:  "console_output.log"
+
+# ============================================================================
+# Telemetry Settings
+# ============================================================================
+telemetry:
+  collect_emon:           false
+  collect_rapl:           true
+  collect_temp:           false
+  emon_warmup_s:          60
+  emon_duration_s:        180
+  skip_emon_processing:   false
+
+# ============================================================================
+# EMON Processing Configuration
+# ============================================================================
+emon:
+  begin_sample:  700
+  dirty_samples: 400
+  views:
+    - socket-view

@@ -1,0 +1,82 @@
+# OSWorld Workload Configuration
+# Note: Shared telemetry paths are in common/telemetry/telemetry_config.yaml
+# Mirrors pnpwls/{workload}/config/workload_config.yaml pattern exactly.
+
+# ============================================================================
+# LLM / Inference Configuration
+# ============================================================================
+models:
+  8b:
+    llamacpp_model: "llama3-8b"
+    default_port: 8000
+    recommended_cores: 64
+  32b:
+    llamacpp_model: "llama3-32b"
+    default_port: 8000
+    recommended_cores: 96
+  70b:
+    llamacpp_model: "llama3-70b"
+    default_port: 8000
+    recommended_cores: 144
+
+# ============================================================================
+# Workload Defaults
+# ============================================================================
+workload:
+  name: "osworld"
+  description: "OS desktop task agent — LLM + QEMU/KVM VMs for GUI automation"
+  default_model: "32b"
+  default_inference_cores: 96
+  default_env_cores: 64           # spread across QEMU VMs
+  default_num_envs: 4             # parallel VM instances (each ~8 GB RAM)
+  default_obs_type: "screenshot"  # screenshot | accessibility_tree
+  default_max_steps: 15
+  default_llm_port: 8000
+
+# ============================================================================
+# VM Configuration
+# ============================================================================
+vm:
+  ram_per_env_gb: 8               # each QEMU VM needs ~8 GB
+  os_image: "ubuntu-22.04"        # default VM image
+  vnc_base_port: 5900             # VNC ports: 5900, 5901, 5902, ...
+  headless: true
+
+# ============================================================================
+# Observation Types
+# ============================================================================
+observation_types:
+  screenshot:
+    description: "Full desktop screenshot (slow, more accurate)"
+    latency_ms: 500
+  accessibility_tree:
+    description: "UI accessibility tree (fast, less reliable)"
+    latency_ms: 50
+
+# ============================================================================
+# Output Files
+# ============================================================================
+output_files:
+  results_csv:  "results.csv"
+  results_json: "results.json"
+  console_log:  "console_output.log"
+
+# ============================================================================
+# Telemetry Settings
+# ============================================================================
+telemetry:
+  collect_emon:           false
+  collect_rapl:           true
+  collect_temp:           false
+  emon_warmup_s:          120   # VM boot takes ~60s; use 120s for real steady-state
+  emon_duration_s:        180
+  skip_emon_processing:   false
+
+# ============================================================================
+# EMON Processing Configuration
+# ============================================================================
+emon:
+  begin_sample:  700
+  dirty_samples: 400
+  views:
+    - socket-view
