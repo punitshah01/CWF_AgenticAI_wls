@@ -122,11 +122,20 @@ class TelemetryManager:
         """Stop all collectors; optionally post-process EMON with EDP."""
         if "emon" in self._active:
             self.emon.stop_collection()
-            if process_emon:
+            if process_emon and self.emon.output_file and self.emon.output_file.exists():
+                print(f"[telemetry] Processing EMON with EDP (platform={self.platform}, sockets={sockets})…")
                 self.emon_output_dir = self.emon.process_emon_with_edp(
                     platform=self.platform, sockets=sockets,
                 )
-                self.emon_ready = self.emon_output_dir is not None
+                if self.emon_output_dir:
+                    self.emon_ready = True
+                    print(f"[telemetry] EMON processing complete → {self.emon_output_dir}")
+                else:
+                    # EDP failed, but raw EMON data exists
+                    self.emon_ready = False
+                    print(f"[telemetry] EMON EDP post-processing failed, but raw data available: {self.emon.output_file}")
+            else:
+                print(f"[telemetry] EMON collection: process_emon={process_emon}, file_exists={self.emon.output_file and self.emon.output_file.exists()}")
 
         if "rapl" in self._active:
             self.rapl.stop_polling()

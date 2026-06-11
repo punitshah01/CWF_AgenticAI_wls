@@ -80,8 +80,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--collect-temp",    action="store_true")
     p.add_argument("--emon-warmup",     type=int, default=60,
                     help="Seconds to wait after workload starts before EMON collection begins (skip cold-start transient)")
-    p.add_argument("--emon-duration",   type=int, default=120,
-                    help="Seconds to collect EMON data; 0 = collect until workload ends")
+    p.add_argument("--emon-duration",   type=int, default=180,
+                    help="Seconds to collect EMON data; 0 = collect until workload ends (default: 180s = 3 min steady-state)")
     p.add_argument("--dry-run",         action="store_true")
     return p.parse_args()
 
@@ -210,7 +210,7 @@ def main() -> None:
     print(f"  Output    : {out_dir}")
     if args.collect_emon:
         dur_label = f"{args.emon_duration}s" if args.emon_duration > 0 else "full run"
-        print(f"  EMON      : warmup={args.emon_warmup}s  duration={dur_label}")
+        print(f"  EMON      : warmup={args.emon_warmup}s, collect {dur_label}")
     print(f"{'='*60}\n")
 
     sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
@@ -231,7 +231,9 @@ def main() -> None:
     bench_results = run_evaluation(args, run_id)
 
     if not args.dry_run:
+        print(f"\n[telemetry] Stopping collectors and processing EMON...")
         tm.stop(process_emon=args.collect_emon, sockets=cpu.get_sockets())
+        print(f"[telemetry] Collection complete.")
 
     common_data: OrderedDict = OrderedDict()
     common_data.update(bench_results)
@@ -245,8 +247,28 @@ def main() -> None:
     rw.add_row(common_data=common_data, rapl_data=tm.rapl_mean)
     rw.save()
 
-    print(f"\n[webarena] success_rate : {bench_results.get('success_rate')}%")
-    print(f"[webarena] Results      : {out_dir}")
+    # Final Summary
+    print(f"\n{'='*70}")
+    print("  WebArena Run Summary")
+    print(f"{'='*70}")
+    print(f"  Run ID           : {run_id}")
+    print(f"  Tasks Completed  : {bench_results.get('tasks_completed', 'N/A')}/{bench_results.get('n_tasks', 'N/A')}")
+    print(f"  Success Rate     : {bench_results.get('success_rate', 'N/A')}%")
+    print(f"  Total Runtime    : {bench_results.get('total_runtime_s', 'N/A')}s")
+    print(f"\n  Power Metrics (RAPL):")
+    print(f"    Package Power  : {tm.pkg_power_w:.1f}W (mean)")
+    print(f"    DRAM Power     : {tm.dram_power_w:.1f}W (mean)")
+    if args.collect_emon:
+        print(f"\n  EMON Collection  : {tm.emon_ready}")
+        if tm.emon_output_dir:
+            print(f"    Output Dir     : {tm.emon_output_dir}")
+            csv_files = list(tm.emon_output_dir.glob("*.csv"))
+            if csv_files:
+                print(f"    CSV Files      : {len(csv_files)} generated")
+                for cf in csv_files[:3]:
+                    print(f"                   - {cf.name}")
+    print(f"\n  Results Location : {out_dir}")
+    print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":
