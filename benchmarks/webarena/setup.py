@@ -842,6 +842,7 @@ def main() -> None:
         log(f"Setup marker written: {setup_marker}", "ok")
 
     log("WebArena setup complete!", "ok")
+    print("\n[SUCCESS] WebArena setup complete")
     sys.exit(0)
 
 

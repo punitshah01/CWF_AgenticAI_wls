@@ -242,7 +242,7 @@ Results land in `results/<benchmark>/<run_id>/results.csv` and `results.json`.
 | Variable | Used By | Description | Default |
 |---|---|---|---|
 | `REGISTRY_URL` | `scripts/setup.py`, `scripts/prefetch_assets.py` | Docker registry for offline image pulls (e.g. `localhost:5000`) | `""` (Docker Hub) |
-| `MINICONDA_LOCAL` | `scripts/setup.py` | Path to cached Miniconda installer (skips download) | `assets/installers/Miniconda3-latest-Linux-x86_64.sh` |
+| `MINICONDA_LOCAL` | `scripts/setup.py` | Path to cached Miniconda installer (skips download) | Miniconda3 installer (see `setup/setup_venv.py`) |
 | `PIP_CACHE_DIR` | `scripts/setup.py` | Shared pip wheel cache directory | pip default |
 | `OPENAI_BASE_URL` | `benchmarks/appworld/run.py` | LLM server OpenAI-compatible API base URL | `http://localhost:8000/v1` |
 | `OPENAI_API_KEY` | `benchmarks/appworld/run.py` | API key (any non-empty string for local server) | `not-needed` |
