@@ -17,17 +17,17 @@ on:
       setup_emon:
         description: 'Install/configure Intel SEP/EMON'
         type: boolean
-        default: 'true'
+        default: true
         required: true
       setup_docker:
         description: 'Install Docker CE'
         type: boolean
-        default: 'true'
+        default: true
         required: true
       cleanup_artifacts:
         description: 'Delete old artifacts before fresh download'
         type: boolean
-        default: 'false'
+        default: false
         required: true
 
 jobs:
