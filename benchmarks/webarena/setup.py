@@ -798,6 +798,7 @@ def main() -> None:
     host = args.host or get_host_ip()
     images_dir = Path(args.images_dir)
     os_family = detect_os_family()
+    cwf_model = args.model.split(":")[-1]
 
     banner("WebArena — Fully Automated Setup for CWF Baremetal")
     print(f"  Host IP       : {host}")
@@ -871,7 +872,7 @@ def main() -> None:
     print(f"  Activate environment (do this once per shell session):")
     print(f"    source ~/activate_webarena.sh")
     print()
-    print(f"  Then run a smoke test (10 tasks):")
+    print(f"  Smoke test (10 tasks) from the cloned WebArena dir ({WORKDIR}):")
     print(f"    python run.py \\")
     print(f"      --instruction_path agent/prompts/jsons/p_cot_id_actree_2s.json \\")
     print(f"      --test_start_idx 0 --test_end_idx 10 \\")
@@ -879,8 +880,11 @@ def main() -> None:
     print(f"      --temperature 0.1 --max_tokens 512 \\")
     print(f"      --result_dir results/run_01")
     print()
-    print(f"  Full run (812 tasks) via CWF runner:")
-    print(f"    python3 {REPO_ROOT}/benchmarks/webarena/run_webarena.py --model {args.model.split(':')[0]} --collect-emon")
+    print(f"  Smoke test (10 tasks) from this CWF repo root ({REPO_ROOT}):")
+    print(f"    python3 benchmarks/webarena/run.py --model {cwf_model} --start-idx 0 --end-idx 10")
+    print()
+    print(f"  Full run (812 tasks) via CWF runner from repo root:")
+    print(f"    python3 benchmarks/webarena/run.py --model {cwf_model} --collect-emon")
     print()
 
     # Write .setup_complete marker so run.py can verify setup was done
