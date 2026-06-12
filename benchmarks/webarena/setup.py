@@ -426,12 +426,32 @@ def download_and_load_images(images_dir: Path, include_gitlab: bool,
         if svc != "wikipedia":
             image_name = WEBARENA_IMAGE_NAMES[svc]
             # Check if already loaded
-            check = run_capture(f"docker images -q {image_name}", dry_run=dry_run)
-            if check:
+            already_loaded = run_capture(f"docker images -q {image_name}", dry_run=dry_run)
+            if already_loaded:
                 log(f"{svc}: image {image_name} already loaded", "ok")
             else:
                 log(f"Loading {svc} into Docker...", "info")
-                run(f"docker load --input {filepath}", dry_run=dry_run, timeout=600)
+                result = run(f"docker load --input {filepath}", dry_run=dry_run, timeout=600)
+                if not dry_run and result.returncode != 0:
+                    log(
+                        f"[FATAL] docker load failed for {svc} (exit {result.returncode}).\n"
+                        f"  Common cause: /root/docker-data did not exist when Docker started.\n"
+                        f"  Fix: mkdir -p /root/docker-data && systemctl restart docker\n"
+                        f"  Then re-run: python3 benchmarks/webarena/setup.py --skip-docker --skip-ollama",
+                        "error",
+                    )
+                    sys.exit(1)
+                # Verify image is now visible
+                if not dry_run:
+                    loaded_check = run_capture(f"docker images -q {image_name}")
+                    if not loaded_check:
+                        log(
+                            f"[FATAL] docker load reported success but image '{image_name}' not found.\n"
+                            f"  Check Docker data-root: docker info | grep 'Docker Root Dir'",
+                            "error",
+                        )
+                        sys.exit(1)
+                log(f"{svc}: image {image_name} loaded successfully", "ok")
 
     log("All Docker images ready", "ok")
 
@@ -442,19 +462,37 @@ def start_and_configure_services(host: str, images_dir: Path,
                                   include_gitlab: bool, dry_run: bool) -> None:
     banner("Step 6: Start Containers + Configure Service URLs")
 
-    # Stop/remove any existing containers
+    # Stop/remove any existing containers (handles both running and stopped)
     for name in ["shopping", "shopping_admin", "forum", "gitlab", "wikipedia"]:
         run(f"docker rm -f {name} 2>/dev/null || true", dry_run=dry_run)
 
+    def _require_image(image_name: str) -> None:
+        """Abort if a required Docker image is not loaded."""
+        if dry_run:
+            return
+        if not run_capture(f"docker images -q {image_name}"):
+            log(
+                f"[FATAL] Docker image '{image_name}' not loaded.\n"
+                f"  Run image load step first:\n"
+                f"    python3 benchmarks/webarena/setup.py --skip-docker --skip-ollama --skip-containers\n"
+                f"  Or load manually:\n"
+                f"    docker load --input <path-to-{image_name}.tar>",
+                "error",
+            )
+            sys.exit(1)
+
     # ── Start Shopping
+    _require_image("shopping_final_0712")
     run("docker run --name shopping -p 7770:80 -d shopping_final_0712",
         dry_run=dry_run)
 
     # ── Start Shopping Admin
+    _require_image("shopping_admin_final_0719")
     run("docker run --name shopping_admin -p 7780:80 -d shopping_admin_final_0719",
         dry_run=dry_run)
 
     # ── Start Forum (Reddit/Postmill)
+    _require_image("postmill-populated-exposed-withimg")
     run("docker run --name forum -p 9999:80 -d postmill-populated-exposed-withimg",
         dry_run=dry_run)
 
