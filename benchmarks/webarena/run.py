@@ -253,6 +253,60 @@ def _preflight_emon() -> None:
         print(f"[INFO] EMON ready: {check.stdout.strip().splitlines()[0]}")
 
 
+def _ensure_magento_configured() -> None:
+    """Re-apply critical Magento settings every run — idempotent.
+
+    Fixes: auto_login timeout because the admin login page never loads.
+    Root cause: Magento has wrong base_url from the original image, or
+    password-reset requirement is active, causing a redirect away from the
+    login form.  Running these commands takes ~5s and is safe to repeat.
+    """
+    import shutil as _shutil
+
+    if not _shutil.which("docker"):
+        return
+
+    # Check shopping_admin container is running
+    check = subprocess.run(
+        ["docker", "inspect", "--format={{.State.Running}}", "shopping_admin"],
+        capture_output=True, text=True,
+    )
+    if check.returncode != 0 or check.stdout.strip() != "true":
+        print("[WARN] shopping_admin container not running — skipping Magento config",
+              file=sys.stderr)
+        return
+
+    # Read host IP from env file (same value used by Magento base_url)
+    host = "localhost"
+    env_file = Path.home() / ".cwf_webarena_env"
+    if env_file.exists():
+        import re as _re
+        m = _re.search(r'SHOPPING_ADMIN="http://([^:]+):', env_file.read_text())
+        if m:
+            host = m.group(1)
+
+    print(f"[webarena] Ensuring Magento admin configured for host={host} …")
+
+    cmds = [
+        # Base URLs
+        f'/var/www/magento2/bin/magento setup:store-config:set --base-url="http://{host}:7780"',
+        f'mysql -h 127.0.0.1 -u magentouser -pMyPassword magentodb '
+        f'-e "UPDATE core_config_data SET value=\'http://{host}:7780/\' '
+        f'WHERE path=\'web/secure/base_url\';"',
+        # Disable forced password reset and password lifetime
+        '/var/www/magento2/bin/magento config:set admin/security/password_is_forced 0',
+        '/var/www/magento2/bin/magento config:set admin/security/password_lifetime 0',
+        # Flush cache so settings take effect
+        '/var/www/magento2/bin/magento cache:flush',
+    ]
+    for cmd in cmds:
+        subprocess.run(
+            f"docker exec shopping_admin {cmd}",
+            shell=True, capture_output=True,
+        )
+    print("[webarena] Magento admin configured")
+
+
 def _preflight_playwright() -> None:
     """Abort early if playwright is not importable inside this venv."""
     check = subprocess.run(
@@ -442,6 +496,7 @@ def main() -> None:
         _preflight_ollama_model(args, _resolve_model_name(args))
         if args.collect_emon:
             _preflight_emon()
+        _ensure_magento_configured()
 
     # TeeOutput: mirror all stdout/stderr to console_output.log (pnpwls pattern)
     if not args.dry_run:
