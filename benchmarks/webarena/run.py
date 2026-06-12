@@ -173,6 +173,85 @@ def _resolve_model_name(args: argparse.Namespace) -> str:
     return _MODEL_MAP.get(args.model, args.model)
 
 
+def _ensure_webarena_patched() -> None:
+    """Apply all CWF patches to the WebArena clone — idempotent, safe to call every run."""
+    import re as _re
+
+    if not WORKDIR.exists():
+        return
+
+    # Patch 1: tokenizers.py — KeyError on non-OpenAI model names
+    _tf = WORKDIR / "llms" / "tokenizers.py"
+    if _tf.exists():
+        _c = _tf.read_text()
+        _pat = _re.compile(
+            r'^( +)(self\.tokenizer = tiktoken\.encoding_for_model\(model_name\))\s*$',
+            _re.MULTILINE,
+        )
+        if _pat.search(_c) and "except KeyError" not in _c:
+            def _wrap(m):
+                i = m.group(1)
+                return (f"{i}try:\n{i}    self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
+                        f"{i}except KeyError:\n{i}    self.tokenizer = tiktoken.get_encoding(\"cl100k_base\")")
+            _tf.write_text(_pat.sub(_wrap, _c))
+            print("[webarena] Patched tokenizers.py")
+
+    # Patch 2: run.py — ZeroDivisionError when scores list is empty
+    _rf = WORKDIR / "run.py"
+    if _rf.exists():
+        _c = _rf.read_text()
+        _old = 'logger.info(f"Average score: {sum(scores) / len(scores)}")'
+        _new = 'logger.info(f"Average score: {sum(scores) / len(scores) if scores else 0.0}")'
+        if _old in _c:
+            _rf.write_text(_c.replace(_old, _new))
+            print("[webarena] Patched run.py: ZeroDivisionError guard")
+
+    # Patch 3: helper_functions.py — hardcoded gpt-4-1106-preview evaluator
+    _hf = WORKDIR / "evaluation_harness" / "helper_functions.py"
+    if _hf.exists():
+        _c = _hf.read_text()
+        _p = _re.sub(
+            r'model="gpt-4-1106-preview"',
+            'model=__import__("os").environ.get("WEBARENA_EVAL_MODEL","gpt-4-1106-preview")',
+            _c,
+        )
+        if _p != _c:
+            _hf.write_text(_p)
+            print("[webarena] Patched helper_functions.py: evaluator uses WEBARENA_EVAL_MODEL")
+
+    # Patch 4: auto_login.py — 30s default timeout too short for slow Magento admin.
+    # Increase all Playwright timeouts to 90s by calling set_default_timeout after
+    # creating the page object.
+    _al = WORKDIR / "browser_env" / "auto_login.py"
+    if _al.exists():
+        _c = _al.read_text()
+        _old_line = "    page = context.new_page()"
+        _new_line = ("    page = context.new_page()\n"
+                     "    page.set_default_timeout(90000)  # CWF: Magento admin is slow on bare-metal")
+        if _old_line in _c and "set_default_timeout" not in _c:
+            _al.write_text(_c.replace(_old_line, _new_line, 1))
+            print("[webarena] Patched auto_login.py: Playwright timeout 30s → 90s")
+
+
+def _preflight_emon() -> None:
+    """Print EMON availability diagnostic; does not abort."""
+    sep_vars = Path("/opt/intel/sep/sep_vars.sh")
+    if not sep_vars.exists():
+        print("[WARN] EMON: /opt/intel/sep/sep_vars.sh not found — EMON disabled.\n"
+              "  Fix: install SEP 5.58 beta to /opt/intel/sep", file=sys.stderr)
+        return
+    check = subprocess.run(
+        f"source {sep_vars} && emon -version",
+        shell=True, executable="/bin/bash", capture_output=True, text=True,
+    )
+    if check.returncode != 0:
+        print("[WARN] EMON binary found but not working — drivers may not be loaded.\n"
+              "  Fix: source /opt/intel/sep/sep_vars.sh && /opt/intel/sep/insmod-sep",
+              file=sys.stderr)
+    else:
+        print(f"[INFO] EMON ready: {check.stdout.strip().splitlines()[0]}")
+
+
 def _preflight_playwright() -> None:
     """Abort early if playwright is not importable inside this venv."""
     check = subprocess.run(
@@ -233,6 +312,9 @@ def build_run_id(args: argparse.Namespace) -> str:
 
 def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     """Invoke WebArena run.py. Returns result dict."""
+    # Always apply patches to the WebArena clone before running — idempotent.
+    _ensure_webarena_patched()
+
     results_dir = WORKDIR / "results" / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -260,6 +342,8 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     env["OPENAI_API_BASE"] = base_url
     # Point the evaluator's fuzzy/ua match to the local model instead of gpt-4
     env.setdefault("WEBARENA_EVAL_MODEL", model_name)
+    # Suppress beartype PEP 585 deprecation warnings from gymnasium (noisy, not actionable)
+    env["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
 
     # Ensure WebArena's internal subprocess calls (e.g. auto_login.py) use the
     # venv python — not the system python3 which lacks playwright.
@@ -355,6 +439,8 @@ def main() -> None:
     if not args.dry_run:
         _preflight_playwright()
         _preflight_ollama_model(args, _resolve_model_name(args))
+        if args.collect_emon:
+            _preflight_emon()
 
     # TeeOutput: mirror all stdout/stderr to console_output.log (pnpwls pattern)
     if not args.dry_run:
