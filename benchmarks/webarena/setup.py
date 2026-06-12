@@ -244,11 +244,15 @@ def setup_docker_and_iptables(os_family: str, dry_run: bool) -> None:
     # Configure Docker daemon (data-root on /root to use root partition)
     if not dry_run:
         Path("/etc/docker").mkdir(parents=True, exist_ok=True)
+        # Create data-root BEFORE writing daemon.json — Docker load will fail
+        # with "stat /root/docker-data/tmp: no such file or directory" otherwise.
+        Path("/root/docker-data").mkdir(parents=True, exist_ok=True)
         Path("/etc/docker/daemon.json").write_text(json.dumps({
             "data-root": "/root/docker-data",
             "storage-driver": "overlay2",
             "iptables": True,
         }, indent=2) + "\n")
+        log("Docker data-root created at /root/docker-data", "ok")
 
     # Configure Docker proxy (Intel network)
     proxy_env = get_proxy_env()
