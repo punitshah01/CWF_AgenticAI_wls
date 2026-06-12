@@ -220,8 +220,8 @@ def _ensure_webarena_patched() -> None:
             print("[webarena] Patched helper_functions.py: evaluator uses WEBARENA_EVAL_MODEL")
 
     # Patch 4: auto_login.py — 30s default timeout too short for slow Magento admin.
-    # Increase all Playwright timeouts to 90s by calling set_default_timeout after
-    # creating the page object.
+    # Increase ALL Playwright page timeouts to 90s. There are two new_page() calls
+    # (is_expired + renew_comb) — replace ALL of them so both functions get 90s.
     _al = WORKDIR / "browser_env" / "auto_login.py"
     if _al.exists():
         _c = _al.read_text()
@@ -229,8 +229,9 @@ def _ensure_webarena_patched() -> None:
         _new_line = ("    page = context.new_page()\n"
                      "    page.set_default_timeout(90000)  # CWF: Magento admin is slow on bare-metal")
         if _old_line in _c and "set_default_timeout" not in _c:
-            _al.write_text(_c.replace(_old_line, _new_line, 1))
-            print("[webarena] Patched auto_login.py: Playwright timeout 30s → 90s")
+            # Replace ALL occurrences (both is_expired and renew_comb functions)
+            _al.write_text(_c.replace(_old_line, _new_line))
+            print("[webarena] Patched auto_login.py: Playwright timeout 30s → 90s (all page contexts)")
 
 
 def _preflight_emon() -> None:
