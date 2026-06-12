@@ -118,6 +118,20 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _preflight_emon() -> None:
+    sep_vars = Path("/opt/intel/sep/sep_vars.sh")
+    if not sep_vars.exists():
+        print("[WARN] EMON: /opt/intel/sep not found", file=sys.stderr)
+        return
+    r = subprocess.run(f"source {sep_vars} && emon -version",
+                       shell=True, executable="/bin/bash", capture_output=True, text=True)
+    if r.returncode != 0:
+        print("[WARN] EMON drivers not loaded. Fix: source /opt/intel/sep/sep_vars.sh && /opt/intel/sep/insmod-sep",
+              file=sys.stderr)
+    else:
+        print(f"[INFO] EMON ready: {r.stdout.strip().splitlines()[0]}")
+
+
 def build_run_id(args: argparse.Namespace) -> str:
     if args.run_id:
         return args.run_id
@@ -127,9 +141,17 @@ def build_run_id(args: argparse.Namespace) -> str:
 
 def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     """Invoke the SWE-bench evaluation harness. Returns result dict."""
+    _no_proxy = "localhost,127.0.0.1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     dataset = DATASET_MAP[args.split]
     predictions = WORKDIR / "predictions" / f"{run_id}.jsonl"
     predictions.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build subprocess env — bypass Intel proxy for Docker and local LLM connections
+    env = os.environ.copy()
+    for _p in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        env.pop(_p, None)
+    env["NO_PROXY"] = _no_proxy
+    env["no_proxy"] = _no_proxy
 
     base_url = f"http://localhost:{args.llm_port}/v1"
     print(f"[swebench] Dataset   : {dataset}")
@@ -187,12 +209,12 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
 
     t0 = time.time()
     print("[swebench] Running agent prediction ...")
-    rc = subprocess.run(agent_cmd, cwd=str(WORKDIR)).returncode
+    rc = subprocess.run(agent_cmd, cwd=str(WORKDIR), env=env).returncode
     if rc != 0:
         print(f"[WARN] SWE-agent returned exit code {rc}", file=sys.stderr)
 
     print("[swebench] Running evaluation harness ...")
-    rc = subprocess.run(eval_cmd, cwd=str(WORKDIR)).returncode
+    rc = subprocess.run(eval_cmd, cwd=str(WORKDIR), env=env).returncode
 
     results["total_runtime_s"] = str(round(time.time() - t0, 1))
 
@@ -242,6 +264,8 @@ def main() -> None:
     )
 
     if not args.dry_run:
+        if args.collect_emon:
+            _preflight_emon()
         tm.start(session_name=run_id)
 
     bench_results = run_evaluation(args, run_id)

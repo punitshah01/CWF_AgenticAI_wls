@@ -103,6 +103,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--agent",           default="simplified_function_calling_agent")
     p.add_argument("--llm-port",        type=int, default=8000)
     p.add_argument("--run-id",          default="")
+    p.add_argument("--ollama-model",    default="", metavar="NAME",
+                   help="Override Ollama model name (e.g. 'llama3.1:8b'). "
+                        "If empty, auto-maps from --model.")
     p.add_argument("--collect-emon",    action="store_true")
     p.add_argument("--collect-rapl",    action="store_true", default=True)
     p.add_argument("--collect-temp",    action="store_true")
@@ -117,12 +120,36 @@ def build_run_id(args: argparse.Namespace) -> str:
     return f"appworld_{args.dataset}_{args.model}_{args.inference_cores}c_{ts}"
 
 
+_MODEL_MAP = {"8b": "llama3.1:8b", "32b": "llama3.1:32b", "70b": "llama3.1:70b"}
+
+
+def _preflight_emon() -> None:
+    sep_vars = Path("/opt/intel/sep/sep_vars.sh")
+    if not sep_vars.exists():
+        print("[WARN] EMON: /opt/intel/sep not found", file=sys.stderr)
+        return
+    r = subprocess.run(f"source {sep_vars} && emon -version",
+                       shell=True, executable="/bin/bash", capture_output=True, text=True)
+    if r.returncode != 0:
+        print("[WARN] EMON drivers not loaded. Fix: source /opt/intel/sep/sep_vars.sh && /opt/intel/sep/insmod-sep",
+              file=sys.stderr)
+    else:
+        print(f"[INFO] EMON ready: {r.stdout.strip().splitlines()[0]}")
+
+
 def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
+    _no_proxy = "localhost,127.0.0.1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     base_url = f"http://localhost:{args.llm_port}/v1"
+    model_name = args.ollama_model if args.ollama_model else _MODEL_MAP.get(args.model, args.model)
 
     env = os.environ.copy()
     env["OPENAI_BASE_URL"] = base_url
     env["OPENAI_API_KEY"]  = "not-needed"
+    # Bypass Intel proxy for local LLM and service connections
+    for _p in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        env.pop(_p, None)
+    env["NO_PROXY"] = _no_proxy
+    env["no_proxy"] = _no_proxy
 
     run_cmd = [
         "appworld", "run", "auto",
@@ -205,6 +232,8 @@ def main() -> None:
         collect_temp=args.collect_temp,
     )
     if not args.dry_run:
+        if args.collect_emon:
+            _preflight_emon()
         tm.start(session_name=run_id)
 
     bench_results = run_evaluation(args, run_id)
