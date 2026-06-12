@@ -195,14 +195,28 @@ def detect_os_family() -> str:
     return "ubuntu"
 
 
+# Intel corporate proxy — used on CWF lab machines when no proxy env vars are set.
+_INTEL_PROXY = "http://proxy-dmz.intel.com:912"
+_INTEL_NO_PROXY = "localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16,.intel.com"
+
+
 def get_proxy_env() -> dict:
-    """Get proxy environment variables if set."""
+    """Get proxy environment variables if set, falling back to Intel corporate proxy."""
     proxy_vars = {}
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
                 "http_proxy", "https_proxy", "no_proxy"):
         val = os.environ.get(key)
         if val:
             proxy_vars[key] = val
+    # On Intel lab machines the proxy may not be in the environment (e.g. fresh root shell).
+    # Fall back to the standard Intel DMZ proxy so that model pulls / curl installs work.
+    if not proxy_vars.get("HTTPS_PROXY") and not proxy_vars.get("https_proxy"):
+        proxy_vars["HTTP_PROXY"]  = _INTEL_PROXY
+        proxy_vars["HTTPS_PROXY"] = _INTEL_PROXY
+        proxy_vars["NO_PROXY"]    = _INTEL_NO_PROXY
+        proxy_vars["http_proxy"]  = _INTEL_PROXY
+        proxy_vars["https_proxy"] = _INTEL_PROXY
+        proxy_vars["no_proxy"]    = _INTEL_NO_PROXY
     return proxy_vars
 
 
@@ -624,9 +638,18 @@ def start_homepage(host: str, venv_path: str, dry_run: bool) -> None:
 def setup_ollama(model: str, dry_run: bool) -> None:
     banner(f"Step 8: Ollama LLM Server (model: {model})")
 
-    # Install Ollama
+    # Install Ollama — pass proxy env so curl can reach the internet on Intel network
+    proxy_env_for_curl = {**os.environ, **get_proxy_env()}
     if not shutil.which("ollama") or dry_run:
-        run("curl -fsSL https://ollama.com/install.sh | sh", dry_run=dry_run)
+        if dry_run:
+            log("[dry-run] curl -fsSL https://ollama.com/install.sh | sh", "info")
+        else:
+            result = subprocess.run(
+                "curl -fsSL https://ollama.com/install.sh | sh",
+                shell=True, env=proxy_env_for_curl,
+            )
+            if result.returncode != 0:
+                log("Ollama install failed — check network/proxy", "warn")
 
     # Configure Ollama with proxy (required on Intel network for model pull)
     proxy_env = get_proxy_env()
@@ -662,15 +685,17 @@ def setup_ollama(model: str, dry_run: bool) -> None:
     def _pull_with_fallback(primary: str) -> str:
         """Pull *primary*; if not found, try llama3.1 variant. Returns final model name."""
         import re as _re
+        # Build env with proxy so that ollama pull can reach the registry on Intel network
+        pull_env = {**os.environ, **get_proxy_env()}
         log(f"Pulling Ollama model: {primary} (this may take several minutes)...", "info")
-        result = subprocess.run(["ollama", "pull", primary])
+        result = subprocess.run(["ollama", "pull", primary], env=pull_env)
         if result.returncode == 0 and _ollama_model_exists(primary):
             return primary
         # Try llama3 → llama3.1 substitution
         fallback = _re.sub(r'^llama3:', 'llama3.1:', primary)
         if fallback != primary:
             log(f"'{primary}' not found in registry — trying fallback: {fallback}", "warn")
-            result2 = subprocess.run(["ollama", "pull", fallback])
+            result2 = subprocess.run(["ollama", "pull", fallback], env=pull_env)
             if result2.returncode == 0 and _ollama_model_exists(fallback):
                 log(f"Pulled fallback model: {fallback}", "ok")
                 return fallback
