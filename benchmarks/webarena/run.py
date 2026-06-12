@@ -265,6 +265,14 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     venv_bin = str(WEBARENA_VENV_PYTHON.parent)
     env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
     env["VIRTUAL_ENV"] = str(WEBARENA_VENV_PYTHON.parent.parent)
+    # WebArena's run.py calls auto_login.py via hardcoded "python" (not sys.executable).
+    # Set PYTHONPATH so even the system python can import playwright from the venv.
+    venv_site = str(next(
+        (WEBARENA_VENV_PYTHON.parent.parent / "lib").glob("python3*/site-packages"),
+        WEBARENA_VENV_PYTHON.parent.parent / "lib" / "python3.11" / "site-packages",
+    ))
+    existing_pypath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = venv_site + (os.pathsep + existing_pypath if existing_pypath else "")
 
     eval_cmd = [
         sys.executable, str(WORKDIR / "run.py"),
