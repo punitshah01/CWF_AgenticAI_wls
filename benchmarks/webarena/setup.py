@@ -666,7 +666,11 @@ def setup_ollama(model: str, dry_run: bool) -> None:
         (ollama_override_dir / "override.conf").write_text("\n".join(lines) + "\n")
 
     run("systemctl daemon-reload", dry_run=dry_run)
-    run("systemctl enable --now ollama", dry_run=dry_run)
+    # Always restart (not just enable) so the proxy env from override.conf takes effect.
+    # 'enable --now' is a no-op when the service is already running.
+    run("systemctl enable ollama", dry_run=dry_run)
+    run("systemctl restart ollama", dry_run=dry_run)
+    log("Ollama service restarted with proxy config", "ok")
 
     if not dry_run:
         time.sleep(5)
