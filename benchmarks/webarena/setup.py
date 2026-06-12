@@ -421,6 +421,37 @@ def clone_webarena(venv_path: str, dry_run: bool) -> Path:
         else:
             log("tokenizers.py already patched or pattern not matched", "ok")
 
+    # Patch 2: ZeroDivisionError in upstream run.py when all tasks fail
+    # (scores list is empty → division by zero on line: sum(scores)/len(scores))
+    upstream_run = WORKDIR / "run.py"
+    if upstream_run.exists() and not dry_run:
+        content = upstream_run.read_text()
+        old = 'logger.info(f"Average score: {sum(scores) / len(scores)}")'
+        new = ('logger.info(f"Average score: {sum(scores) / len(scores) if scores else 0.0}")')
+        if old in content and new not in content:
+            upstream_run.write_text(content.replace(old, new))
+            log("Patched run.py: ZeroDivisionError when scores list is empty", "ok")
+
+    # Patch 3: upstream evaluator hardcodes gpt-4-1106-preview for fuzzy/ua match.
+    # Replace with llama3.1:70b via WEBARENA_EVAL_MODEL env var (falls back to
+    # gpt-4-1106-preview if not set, preserving original behaviour).
+    helper_file = WORKDIR / "evaluation_harness" / "helper_functions.py"
+    if helper_file.exists() and not dry_run:
+        import re as _re
+        content = helper_file.read_text()
+        # Replace hardcoded model string with env-var lookup in both llm_fuzzy_match
+        # and llm_ua_match (both use the same pattern)
+        patched = _re.sub(
+            r'model="gpt-4-1106-preview"',
+            'model=__import__("os").environ.get("WEBARENA_EVAL_MODEL", "gpt-4-1106-preview")',
+            content,
+        )
+        if patched != content:
+            helper_file.write_text(patched)
+            log("Patched helper_functions.py: evaluator model reads WEBARENA_EVAL_MODEL env var", "ok")
+        else:
+            log("helper_functions.py already patched or pattern not matched", "ok")
+
     log(f"WebArena repo ready at {WORKDIR}", "ok")
     return WORKDIR
 

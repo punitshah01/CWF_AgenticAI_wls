@@ -258,6 +258,8 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     # (WebArena's run.py does NOT accept --openai_api_base as a CLI arg)
     env["OPENAI_API_KEY"] = env.get("OPENAI_API_KEY", "dummy")
     env["OPENAI_API_BASE"] = base_url
+    # Point the evaluator's fuzzy/ua match to the local model instead of gpt-4
+    env.setdefault("WEBARENA_EVAL_MODEL", model_name)
 
     # Ensure WebArena's internal subprocess calls (e.g. auto_login.py) use the
     # venv python — not the system python3 which lacks playwright.
