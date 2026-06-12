@@ -827,6 +827,7 @@ def generate_test_data_and_login(host: str, venv_path: str,
 
     # Write env file for future use by run.py
     env_file = Path.home() / ".cwf_webarena_env"
+    _no_proxy_val = "localhost,127.0.0.1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     if not dry_run:
         env_file.write_text(
             f'# WebArena — source this file before running evaluation\n'
@@ -840,6 +841,10 @@ def generate_test_data_and_login(host: str, venv_path: str,
             f'export HOMEPAGE="PASS"\n'
             f'export OPENAI_API_KEY="dummy"\n'
             f'export OPENAI_API_BASE="http://localhost:11434/v1"\n'
+            f'# Bypass Intel corporate proxy for WebArena local container IPs\n'
+            f'export NO_PROXY="{_no_proxy_val}"\n'
+            f'export no_proxy="{_no_proxy_val}"\n'
+            f'unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy\n'
         )
     log(f"Environment file written to {env_file}", "ok")
 
