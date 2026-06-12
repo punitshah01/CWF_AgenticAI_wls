@@ -400,6 +400,19 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     # Suppress beartype PEP 585 deprecation warnings from gymnasium (noisy, not actionable)
     env["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
 
+    # CRITICAL: Bypass Intel corporate proxy for all WebArena local services.
+    # Playwright (Chromium) picks up system proxy settings. The Intel proxy
+    # blocks requests to internal IPs (10.x.x.x) with HTTP 403 "Access Denied".
+    # We must unset all proxy vars and explicitly set NO_PROXY to cover all
+    # local service IPs and ports used by WebArena containers.
+    for _pvar in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        env.pop(_pvar, None)
+    _local_no_proxy = "localhost,127.0.0.1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    env["NO_PROXY"]  = _local_no_proxy
+    env["no_proxy"]  = _local_no_proxy
+    # Chromium also respects these env vars for proxy bypass
+    env["PLAYWRIGHT_NO_PROXY"] = _local_no_proxy
+
     # Ensure WebArena's internal subprocess calls (e.g. auto_login.py) use the
     # venv python — not the system python3 which lacks playwright.
     # Prepending the venv bin to PATH means `python3` resolves to the venv python.

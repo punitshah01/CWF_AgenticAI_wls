@@ -773,6 +773,16 @@ def generate_test_data_and_login(host: str, venv_path: str,
     )
     env["HOMEPAGE"] = "PASS"
 
+    # CRITICAL: Bypass Intel corporate proxy for Playwright (Chromium).
+    # The Intel proxy blocks requests to internal IPs (e.g. 10.x.x.x) with
+    # HTTP 403 "Access Denied — proxy policy restriction".
+    # Strip proxy vars and set NO_PROXY to cover all WebArena container IPs.
+    for _pvar in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        env.pop(_pvar, None)
+    _no_proxy = "localhost,127.0.0.1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    env["NO_PROXY"] = _no_proxy
+    env["no_proxy"] = _no_proxy
+
     # Generate config files (812 tasks)
     log("Generating task config files...", "info")
     if not dry_run:
