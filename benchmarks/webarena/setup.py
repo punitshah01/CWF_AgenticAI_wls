@@ -342,8 +342,23 @@ def setup_python_env(dry_run: bool) -> str:
     log(f"Installing {len(webarena_pkgs)} packages (skipping already-satisfied)...", "info")
     pip_install(pip, webarena_pkgs, dry_run)
 
-    # Install playwright browser (skip install-deps on RHEL — done in Step 2)
-    run(f"{venv_path}/bin/playwright install", dry_run=dry_run)
+    # Install playwright browser (chromium only — skip install-deps on RHEL, done in Step 2)
+    # PLAYWRIGHT_BROWSERS_PATH is required on unsupported OS (RHEL/CentOS) so the browser
+    # binary lands in a known location rather than the default ~/.cache path.
+    import os as _os
+    pw_env = _os.environ.copy()
+    pw_env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".playwright-browsers"))
+    if dry_run:
+        log(f"[dry-run] {venv_path}/bin/playwright install chromium", "info")
+    else:
+        pw_result = subprocess.run(
+            [f"{venv_path}/bin/playwright", "install", "chromium"],
+            env=pw_env,
+        )
+        if pw_result.returncode != 0:
+            log("playwright install chromium failed — browser may not work", "warn")
+        else:
+            log("Playwright Chromium browser installed", "ok")
 
     log(f"Python venv ready at {venv_path}", "ok")
     return str(venv_path)
@@ -380,12 +395,11 @@ def clone_webarena(venv_path: str, dry_run: bool) -> Path:
         if pattern.search(content) and "except KeyError" not in content:
             def _wrap_in_try(m):
                 indent = m.group(1)
-                base = indent[:-4] if len(indent) >= 4 else indent
                 return (
-                    f"{base}try:\n"
-                    f"{indent}self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
-                    f"{base}except KeyError:\n"
-                    f'{indent}self.tokenizer = tiktoken.get_encoding("cl100k_base")'
+                    f"{indent}try:\n"
+                    f"{indent}    self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
+                    f"{indent}except KeyError:\n"
+                    f'{indent}    self.tokenizer = tiktoken.get_encoding("cl100k_base")'
                 )
             content = pattern.sub(_wrap_in_try, content)
             tokenizer_file.write_text(content)
@@ -634,10 +648,47 @@ def setup_ollama(model: str, dry_run: bool) -> None:
     if not dry_run:
         time.sleep(5)
 
-    # Pull model
-    log(f"Pulling Ollama model: {model} (this may take several minutes)...", "info")
-    run(f"ollama pull {model}", dry_run=dry_run, timeout=7200)
-    log(f"Ollama ready with model: {model}", "ok")
+    # Pull model — with automatic fallback from llama3:Xb → llama3.1:Xb
+    # (Ollama library retired the plain 'llama3' tag; 'llama3.1' is the current name)
+    def _ollama_model_exists(name: str) -> bool:
+        try:
+            result = subprocess.run(
+                ["ollama", "list"], capture_output=True, text=True
+            )
+            return name in result.stdout
+        except Exception:
+            return False
+
+    def _pull_with_fallback(primary: str) -> str:
+        """Pull *primary*; if not found, try llama3.1 variant. Returns final model name."""
+        import re as _re
+        log(f"Pulling Ollama model: {primary} (this may take several minutes)...", "info")
+        result = subprocess.run(["ollama", "pull", primary])
+        if result.returncode == 0 and _ollama_model_exists(primary):
+            return primary
+        # Try llama3 → llama3.1 substitution
+        fallback = _re.sub(r'^llama3:', 'llama3.1:', primary)
+        if fallback != primary:
+            log(f"'{primary}' not found in registry — trying fallback: {fallback}", "warn")
+            result2 = subprocess.run(["ollama", "pull", fallback])
+            if result2.returncode == 0 and _ollama_model_exists(fallback):
+                log(f"Pulled fallback model: {fallback}", "ok")
+                return fallback
+        log(
+            f"[ERROR] Could not pull '{primary}' or '{fallback}'.\n"
+            "  Check 'ollama list' on the host and re-run setup with\n"
+            f"  --model <exact-tag>, e.g. --model llama3.1:70b",
+            "warn",
+        )
+        return primary  # return original so caller can decide
+
+    if dry_run:
+        log(f"[dry-run] ollama pull {model}", "info")
+        final_model = model
+    else:
+        final_model = _pull_with_fallback(model)
+
+    log(f"Ollama ready with model: {final_model}", "ok")
 
 
 # ── Step 9: Generate Test Data + Auto-Login ───────────────────────────────────
@@ -839,8 +890,8 @@ def parse_args() -> argparse.Namespace:
                         help="Skip image download/load (if already loaded).")
     parser.add_argument("--skip-containers", action="store_true",
                         help="Skip container start/config (if already running).")
-    parser.add_argument("--model", default="llama3:8b",
-                        help="Ollama model to pull. E.g. llama3:8b, llama3:70b")
+    parser.add_argument("--model", default="llama3.1:8b",
+                        help="Ollama model to pull. E.g. llama3.1:8b, llama3.1:70b")
     parser.add_argument("--images-dir", default=str(IMAGES_DIR_DEFAULT),
                         help="Directory for Docker image tarballs / .zim file.")
     parser.add_argument("--dry-run", action="store_true",

@@ -163,7 +163,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-_MODEL_MAP = {"8b": "llama3:8b", "32b": "llama3:32b", "70b": "llama3:70b"}
+_MODEL_MAP = {"8b": "llama3.1:8b", "32b": "llama3.1:32b", "70b": "llama3.1:70b"}
 
 
 def _resolve_model_name(args: argparse.Namespace) -> str:
