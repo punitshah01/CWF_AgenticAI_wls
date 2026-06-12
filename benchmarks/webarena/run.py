@@ -259,6 +259,13 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     env["OPENAI_API_KEY"] = env.get("OPENAI_API_KEY", "dummy")
     env["OPENAI_API_BASE"] = base_url
 
+    # Ensure WebArena's internal subprocess calls (e.g. auto_login.py) use the
+    # venv python — not the system python3 which lacks playwright.
+    # Prepending the venv bin to PATH means `python3` resolves to the venv python.
+    venv_bin = str(WEBARENA_VENV_PYTHON.parent)
+    env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
+    env["VIRTUAL_ENV"] = str(WEBARENA_VENV_PYTHON.parent.parent)
+
     eval_cmd = [
         sys.executable, str(WORKDIR / "run.py"),
         "--instruction_path",
