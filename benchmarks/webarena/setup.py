@@ -784,6 +784,25 @@ def generate_test_data_and_login(host: str, venv_path: str,
         log(f"Generated {n_configs} task config files", "ok")
 
     # Generate auto-login cookies via Playwright
+    # MUST re-apply Magento settings first — the Docker image has a hardcoded
+    # base_url from the original build environment, causing Magento to redirect
+    # away from the login form.  password_is_forced=1 also redirects to a
+    # password-change page so the "user name" placeholder never appears.
+    # These commands are idempotent and take ~5s.
+    log("Applying Magento admin settings (base_url + security) before auto-login...", "info")
+    magento_cmds = [
+        f'/var/www/magento2/bin/magento setup:store-config:set --base-url="http://{host}:7780"',
+        f'mysql -h 127.0.0.1 -u magentouser -pMyPassword magentodb '
+        f'-e "UPDATE core_config_data SET value=\'http://{host}:7780/\' '
+        f'WHERE path=\'web/secure/base_url\';"',
+        '/var/www/magento2/bin/magento config:set admin/security/password_is_forced 0',
+        '/var/www/magento2/bin/magento config:set admin/security/password_lifetime 0',
+        '/var/www/magento2/bin/magento cache:flush',
+    ]
+    for _cmd in magento_cmds:
+        run(f"docker exec shopping_admin {_cmd}", dry_run=dry_run)
+    log("Magento admin settings applied", "ok")
+
     log("Generating auto-login cookies (Playwright → .auth/)...", "info")
     if not dry_run:
         (WORKDIR / ".auth").mkdir(parents=True, exist_ok=True)
