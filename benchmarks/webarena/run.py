@@ -34,11 +34,14 @@ Arguments:
 """
 
 import argparse
+import json
 import os
 import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import warnings
 from pathlib import Path
 
@@ -138,6 +141,9 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--model",           default="8b",
                     help="Model shortcut: 8b | 32b | 70b (maps to llama3:<size>)")
+    p.add_argument("--ollama-model",    default="", metavar="NAME",
+                    help="Override the Ollama model name (e.g. 'llama3.1:70b'). "
+                         "If empty, auto-maps from --model (llama3:8b / 32b / 70b).")
     p.add_argument("--inference-cores", type=int, default=96)
     p.add_argument("--env-cores",       type=int, default=48)
     p.add_argument("--start-idx",       type=int, default=0)
@@ -157,6 +163,66 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+_MODEL_MAP = {"8b": "llama3:8b", "32b": "llama3:32b", "70b": "llama3:70b"}
+
+
+def _resolve_model_name(args: argparse.Namespace) -> str:
+    """Return the final model name to pass to Ollama/OpenAI-compat API."""
+    if args.ollama_model:
+        return args.ollama_model
+    return _MODEL_MAP.get(args.model, args.model)
+
+
+def _preflight_playwright() -> None:
+    """Abort early if playwright is not importable inside this venv."""
+    check = subprocess.run(
+        [sys.executable, "-c", "import playwright"],
+        capture_output=True,
+    )
+    if check.returncode != 0:
+        print(
+            "[ERROR] 'playwright' is not installed in this venv.\n"
+            "  Fix: run the following two commands, then retry:\n"
+            f"    {sys.executable.replace('python', 'pip')} install playwright==1.32.1\n"
+            f"    {sys.executable.replace('python', 'playwright')} install chromium",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def _preflight_ollama_model(args: argparse.Namespace, model_name: str) -> None:
+    """Check that the requested model exists in Ollama; print available models if not."""
+    try:
+        url = f"http://localhost:{args.llm_port}/api/tags"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+        available = [m["name"] for m in data.get("models", [])]
+    except Exception:
+        # Ollama not reachable — let the evaluation surface the error naturally
+        return
+
+    if not available:
+        return
+
+    # Exact match (with or without :latest suffix)
+    def _matches(name: str) -> bool:
+        norm = name if ":" in name else f"{name}:latest"
+        target = model_name if ":" in model_name else f"{model_name}:latest"
+        return norm == target
+
+    if any(_matches(a) for a in available):
+        return  # all good
+
+    print(
+        f"[ERROR] Model '{model_name}' not found in Ollama.\n"
+        f"  Available models: {', '.join(available)}\n"
+        f"  Use --ollama-model to specify the exact name, e.g.:\n"
+        f"    --ollama-model {available[0]}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def build_run_id(args: argparse.Namespace) -> str:
     if args.run_id:
         return args.run_id
@@ -171,6 +237,9 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     results_dir.mkdir(parents=True, exist_ok=True)
 
     base_url = f"http://localhost:{args.llm_port}/v1"
+
+    # Resolve and validate model name before touching any env vars
+    model_name = _resolve_model_name(args)
 
     # Source endpoint env vars from the setup-generated file
     env = os.environ.copy()
@@ -189,11 +258,6 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     # (WebArena's run.py does NOT accept --openai_api_base as a CLI arg)
     env["OPENAI_API_KEY"] = env.get("OPENAI_API_KEY", "dummy")
     env["OPENAI_API_BASE"] = base_url
-
-    # Resolve model name for Ollama (e.g. "8b" → "llama3:8b")
-    model_name = args.model
-    if model_name in ("8b", "32b", "70b"):
-        model_name = f"llama3:{model_name}"
 
     eval_cmd = [
         sys.executable, str(WORKDIR / "run.py"),
@@ -270,6 +334,11 @@ def main() -> None:
     out_dir = REPO_ROOT / "results" / BENCHMARK / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Pre-flight: fail fast before starting telemetry or touching EMON
+    if not args.dry_run:
+        _preflight_playwright()
+        _preflight_ollama_model(args, _resolve_model_name(args))
+
     # TeeOutput: mirror all stdout/stderr to console_output.log (pnpwls pattern)
     if not args.dry_run:
         setup_tee_logging(out_dir / "console_output.log")
@@ -278,12 +347,13 @@ def main() -> None:
         cpu = CPUInfo()
         os_info = OSInfo()
         platform = detect_platform()
+        model_label = _resolve_model_name(args)
 
         print(f"\n{'='*60}")
         print("  WebArena Runner")
         print(f"  Run ID    : {run_id}")
         print(f"  Platform  : {platform}")
-        print(f"  Model     : {args.model}  Inf-cores: {args.inference_cores}")
+        print(f"  Model     : {args.model} ({model_label})  Inf-cores: {args.inference_cores}")
         print(f"  Tasks     : {args.start_idx}..{args.end_idx}")
         print(f"  Output    : {out_dir}")
         if args.collect_emon:
