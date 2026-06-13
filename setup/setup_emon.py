@@ -74,6 +74,72 @@ def _run(cmd: str, dry_run: bool = False, check: bool = False,
     )
 
 
+def ensure_python_pip(dry_run: bool) -> bool:
+    """Ensure python3 -m pip is available for pyedp dependency installation."""
+    print("\n[INFO] Checking python3 pip availability ...")
+    if dry_run:
+        print("[ OK ] (dry-run) assuming python3 pip is available")
+        return True
+
+    check = subprocess.run(
+        ["python3", "-m", "pip", "--version"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if check.returncode == 0:
+        print(f"[ OK ] {check.stdout.strip()}")
+        return True
+
+    print("[WARN] python3 pip is missing, trying ensurepip ...", file=sys.stderr)
+    ensurepip = subprocess.run(
+        ["python3", "-m", "ensurepip", "--upgrade"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if ensurepip.returncode == 0:
+        recheck = subprocess.run(
+            ["python3", "-m", "pip", "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if recheck.returncode == 0:
+            print(f"[ OK ] {recheck.stdout.strip()}")
+            return True
+
+    print("[WARN] ensurepip unavailable/failed, trying OS package manager for python3-pip ...", file=sys.stderr)
+
+    pkg_cmds = []
+    if shutil.which("dnf"):
+        pkg_cmds.append("sudo dnf install -y python3-pip")
+    if shutil.which("yum"):
+        pkg_cmds.append("sudo yum install -y python3-pip")
+    if shutil.which("apt-get"):
+        pkg_cmds.append("sudo apt-get update && sudo apt-get install -y python3-pip")
+    if shutil.which("zypper"):
+        pkg_cmds.append("sudo zypper --non-interactive install python3-pip")
+
+    for cmd in pkg_cmds:
+        r = _run(cmd, dry_run=False)
+        if r.returncode != 0:
+            continue
+        recheck = subprocess.run(
+            ["python3", "-m", "pip", "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if recheck.returncode == 0:
+            print(f"[ OK ] {recheck.stdout.strip()}")
+            return True
+
+    print("[ERROR] python3 pip is not available.", file=sys.stderr)
+    print("[ERROR] Install it manually, then rerun setup/setup_emon.py", file=sys.stderr)
+    return False
+
+
 def ensure_kernel_devel(dry_run: bool) -> None:
     """Run setup_kernel_devel.py to ensure kernel-devel is installed."""
     script = Path(__file__).resolve().parent / "setup_kernel_devel.py"
@@ -168,6 +234,9 @@ def load_drivers(dry_run: bool) -> None:
 def configure_pyedp(dry_run: bool) -> None:
     """Install pyedp Python dependencies and pyedp itself (matches pnpwls)."""
     print("\n[INFO] Configuring pyedp ...")
+
+    if not ensure_python_pip(dry_run):
+        sys.exit(1)
 
     # Full pyedp dependency list
     pkgs = " ".join(PYEDP_PIP_PACKAGES)
