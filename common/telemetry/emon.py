@@ -175,11 +175,16 @@ class EmonCollector:
         try:
             sep_vars = self.sep_dir / "sep_vars.sh"
             # Use emon -stop for graceful shutdown
-            subprocess.run(
-                f"source {sep_vars} && emon -stop",
-                shell=True, executable="/bin/bash",
-                capture_output=True, text=True, timeout=30
-            )
+            try:
+                subprocess.run(
+                    f"source {sep_vars} && emon -stop",
+                    shell=True, executable="/bin/bash",
+                    capture_output=True, text=True, timeout=120,
+                )
+            except subprocess.TimeoutExpired:
+                # emon -stop can occasionally hang while flushing output.
+                # Continue with process-group termination to avoid blocking the run.
+                print("[emon] emon -stop timed out after 120s, forcing process shutdown")
             # Also clean up the process
             if self.process.poll() is None:
                 try:
@@ -265,6 +270,19 @@ class EmonCollector:
         mpp_script = self.edp_dir / "pyedp" / "mpp.py"
         if not mpp_script.exists():
             print(f"[emon] mpp.py not found: {mpp_script}")
+            return None
+
+        # mpp.py imports pandas. Fail fast with a clear message instead of a long traceback.
+        dep_check = subprocess.run(
+            ["python3", "-c", "import pandas"],
+            capture_output=True,
+            text=True,
+        )
+        if dep_check.returncode != 0:
+            print(
+                "[emon] EDP skipped: Python dependency 'pandas' is missing for mpp.py.\n"
+                "[emon]   Fix once with: python3 -m pip install -U pandas pyarrow openpyxl tables xlsxwriter"
+            )
             return None
 
         edp_xml_path = self.edp_dir / metadata['edp_xml_file']
