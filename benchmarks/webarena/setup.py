@@ -45,7 +45,7 @@ if (
 ):
     # We're inside a venv. If the venv is broken or missing key files, re-exec with system python3.
     try:
-        import importlib
+        import importlib  # noqa: F401 — probe: test that venv is functional
     except ImportError:
         # Venv is broken. Re-exec with system python3.
         print(
@@ -114,8 +114,12 @@ IMAGES_DIR_DEFAULT = Path.home() / "webarena_images"
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 class Color:
-    BLUE = "\033[94m"; GREEN = "\033[92m"; YELLOW = "\033[93m"
-    RED = "\033[91m"; BOLD = "\033[1m"; RESET = "\033[0m"
+    BLUE = "\033[94m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
 
 
 def log(msg: str, level: str = "info") -> None:
@@ -1078,21 +1082,21 @@ def main() -> None:
 
     # ── Final summary ─────────────────────────────────────────────────────────
     banner("Setup Complete!")
-    print(f"  Activate environment (do this once per shell session):")
-    print(f"    source ~/activate_webarena.sh")
+    print("  Activate environment (do this once per shell session):")
+    print("    source ~/activate_webarena.sh")
     print()
     print(f"  Smoke test (10 tasks) from the cloned WebArena dir ({WORKDIR}):")
-    print(f"    python run.py \\")
-    print(f"      --instruction_path agent/prompts/jsons/p_cot_id_actree_2s.json \\")
-    print(f"      --test_start_idx 0 --test_end_idx 10 \\")
+    print("    python run.py \\")
+    print("      --instruction_path agent/prompts/jsons/p_cot_id_actree_2s.json \\")
+    print("      --test_start_idx 0 --test_end_idx 10 \\")
     print(f"      --provider openai --model {args.model} \\")
-    print(f"      --temperature 0.1 --max_tokens 512 \\")
-    print(f"      --result_dir results/run_01")
+    print("      --temperature 0.1 --max_tokens 512 \\")
+    print("      --result_dir results/run_01")
     print()
     print(f"  Smoke test (10 tasks) from this CWF repo root ({REPO_ROOT}):")
     print(f"    python3 benchmarks/webarena/run.py --model {cwf_model} --start-idx 0 --end-idx 10")
     print()
-    print(f"  Full run (812 tasks) via CWF runner from repo root:")
+    print("  Full run (812 tasks) via CWF runner from repo root:")
     print(f"    python3 benchmarks/webarena/run.py --model {cwf_model} --collect-emon")
     print()
 

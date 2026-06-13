@@ -8,7 +8,7 @@ Mirrors pnpwls/{workload}/lib/results_manager.py pattern.
 """
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 
 def parse_webarena_results(results_dir: Path) -> Dict[str, str]:

@@ -89,7 +89,7 @@ def main():
     args = parser.parse_args()
     setup_logging(args.verbose)
 
-    cfg = parse_config(args.config)
+    parse_config(args.config)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

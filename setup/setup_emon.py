@@ -108,7 +108,7 @@ def download_sep(version: str, dry_run: bool) -> Path:
         print(f"[ OK ] Using cached SEP installer: {cached}")
         return cached
 
-    print(f"\n[INFO] Downloading SEP from artifactory ...")
+    print("\n[INFO] Downloading SEP from artifactory ...")
     print(f"[INFO] URL: {url}")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -199,7 +199,7 @@ def configure_pyedp(dry_run: bool) -> None:
 
 def install_tmc(dry_run: bool) -> None:
     """Clone TMC git repo and run install.sh (matches pnpwls approach)."""
-    print(f"\n[INFO] Installing TMC telemetry client ...")
+    print("\n[INFO] Installing TMC telemetry client ...")
 
     if TMC_CLONE_DIR.exists() and not dry_run:
         print(f"[ OK ] TMC already cloned at {TMC_CLONE_DIR} — pulling latest ...")

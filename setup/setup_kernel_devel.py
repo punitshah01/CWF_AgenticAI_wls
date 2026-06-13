@@ -16,7 +16,6 @@ for the currently running kernel. If not installed, attempts to install it:
 Internal OS detection: /etc/motd contains "WELCOME TO LINUX STACK FOR DMR"
 """
 
-import os
 import re
 import sys
 import logging
@@ -508,10 +507,10 @@ def _scan_dir_for_rpm(base_url: str, kernel_ver: str,
     # Recurse into subdirectories (skip query-string and parent links)
     if depth > 0:
         sub_dirs = [
-            l for l in links
-            if l.endswith("/")
-            and not l.startswith("?")
-            and l not in ("../", "./")
+            link for link in links
+            if link.endswith("/")
+            and not link.startswith("?")
+            and link not in ("../", "./")
         ]
         for sub in sub_dirs:
             sub_url = base_url.rstrip("/") + "/" + sub
@@ -548,7 +547,7 @@ def find_kernel_devel_rpm_in_artifactory(
         return None
 
     # Identify WW-style directories and all other directories at base level
-    ww_dirs   = sort_ww_dirs([l for l in base_links if _is_ww_dir(l)])
+    ww_dirs   = sort_ww_dirs([link for link in base_links if _is_ww_dir(link)])
     root_rpms = rpms_in_listing(base_links)
 
     log.info("Found WW directories: %s", [d.rstrip("/") for d in ww_dirs])

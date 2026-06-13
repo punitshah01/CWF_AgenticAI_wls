@@ -48,7 +48,7 @@ from common.system_metadata import get_system_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
-from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_config
+from common.cli_utils import teardown_logging
 
 BENCHMARK = "appworld"
 BENCHMARK_DIR = Path(__file__).resolve().parent
@@ -140,7 +140,7 @@ def _preflight_emon() -> None:
 def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     _no_proxy = "localhost,127.0.0.1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     base_url = f"http://localhost:{args.llm_port}/v1"
-    model_name = args.ollama_model if args.ollama_model else _MODEL_MAP.get(args.model, args.model)
+    _model_name = args.ollama_model if args.ollama_model else _MODEL_MAP.get(args.model, args.model)  # noqa: F841
 
     env = os.environ.copy()
     env["OPENAI_BASE_URL"] = base_url

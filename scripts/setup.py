@@ -487,11 +487,26 @@ def parse_args() -> argparse.Namespace:
                         help="Path to pre-downloaded SEP .tar.bz2 (skips download).")
     parser.add_argument("--skip-kernel-devel", action="store_true",
                         help="With --install-emon: skip kernel-devel install step.")
+    parser.add_argument("--list", action="store_true",
+                        help="List available setup components and exit.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    if args.list:
+        components = [
+            "system    — Base OS packages (git, curl, build tools)",
+            "docker    — Docker CE container runtime",
+            "conda     — Miniforge conda + Python environment",
+            "pip       — Common Python dependencies",
+            "emon      — Intel SEP/EMON telemetry (optional)",
+        ]
+        print("Available setup components:")
+        for c in components:
+            print(f"  • {c}")
+        return
 
     if platform.system() != "Linux":
         log("This script targets Linux (CentOS/RHEL or Ubuntu).", "warn")

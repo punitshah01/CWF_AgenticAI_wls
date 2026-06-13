@@ -20,7 +20,6 @@ import re
 import signal
 import subprocess
 import threading
-import time
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Tuple, Dict
@@ -284,7 +283,7 @@ class EmonCollector:
             '-e', str(end_sample),
         ] + view_flags
 
-        print(f"[emon] Running EDP post-processing …")
+        print("[emon] Running EDP post-processing …")
         print(f"[emon]   Command: {' '.join(cmd)}")
         
         try:
@@ -301,7 +300,7 @@ class EmonCollector:
                 print(f"[emon] EDP failed: {r.stderr[-500:]}")
                 return None
         except subprocess.TimeoutExpired:
-            print(f"[emon] EDP timed out")
+            print("[emon] EDP timed out")
             return None
         except Exception as e:
             print(f"[emon] EDP error: {e}")

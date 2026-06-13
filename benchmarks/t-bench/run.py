@@ -46,7 +46,7 @@ from common.system_metadata import get_system_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
-from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_config
+from common.cli_utils import teardown_logging
 
 BENCHMARK = "tbench"
 BENCHMARK_DIR = Path(__file__).resolve().parent

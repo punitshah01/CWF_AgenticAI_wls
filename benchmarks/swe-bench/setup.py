@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 benchmarks/swe-bench/setup.py - Self-contained SWE-bench setup for CWF.
 
@@ -59,8 +59,12 @@ PACKAGES: List[str] = [
 # ---------------------------------------------------------------------------
 
 class Color:
-    BLUE = "\033[94m"; GREEN = "\033[92m"; YELLOW = "\033[93m"
-    RED  = "\033[91m"; BOLD  = "\033[1m";  RESET  = "\033[0m"
+    BLUE = "\033[94m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
 
 def log(msg: str, level: str = "info") -> None:
     c = {"info": Color.BLUE, "ok": Color.GREEN, "warn": Color.YELLOW, "error": Color.RED}.get(level, "")
