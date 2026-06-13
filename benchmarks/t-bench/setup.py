@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 benchmarks/t-bench/setup.py - Self-contained T-Bench setup for CWF.
 

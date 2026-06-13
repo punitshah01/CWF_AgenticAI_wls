@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 benchmarks/appworld/setup.py - Self-contained AppWorld setup for CWF.
 

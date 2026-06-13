@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 benchmarks/osworld/setup.py - Self-contained OSWorld setup for CWF.
 

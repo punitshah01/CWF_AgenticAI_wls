@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 benchmarks/swe-bench/setup.py - Self-contained SWE-bench setup for CWF.
 
