@@ -454,11 +454,28 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
         "tasks_completed": "0",
     }
 
+    total_cpus = os.cpu_count() or 1
+    if args.inference_cores < 0 or args.env_cores < 0:
+        print("[ERROR] --inference-cores and --env-cores must be >= 0", file=sys.stderr)
+        sys.exit(1)
+    if args.inference_cores + args.env_cores > total_cpus:
+        print(
+            "[ERROR] Invalid core split: "
+            f"inference_cores({args.inference_cores}) + env_cores({args.env_cores}) "
+            f"> total_cpus({total_cpus}).\n"
+            "  Hint: if you want to dedicate all CPUs to LLM, set --env-cores 0.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if args.dry_run:
         print("[dry-run] Would run:")
         print(f"  source {env_file}")
-        print(f"  taskset -c {args.inference_cores}-{args.inference_cores+args.env_cores-1} \\")
-        print(f"    {' '.join(eval_cmd)}")
+        if args.env_cores > 0:
+            print(f"  taskset -c {args.inference_cores}-{args.inference_cores+args.env_cores-1} \\")
+            print(f"    {' '.join(eval_cmd)}")
+        else:
+            print(f"  {' '.join(eval_cmd)}")
         return results
 
     if not WORKDIR.exists():
@@ -476,7 +493,9 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     else:
         cmd = eval_cmd
 
-    subprocess.run(cmd, cwd=str(WORKDIR), env=env)
+    run_rc = subprocess.run(cmd, cwd=str(WORKDIR), env=env).returncode
+    if run_rc != 0:
+        print(f"[ERROR] WebArena evaluation command failed with exit code {run_rc}", file=sys.stderr)
     results["total_runtime_s"] = str(round(time.time() - t0, 1))
 
     # Parse result JSON if available
