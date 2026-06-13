@@ -13,7 +13,6 @@ Usage:
 """
 
 import logging
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -31,7 +30,6 @@ if sys.prefix == sys.base_prefix:
     )
 
 from common.cli_utils import get_base_parser, parse_config, setup_logging  # noqa: E402
-from common.metadata import build_metadata  # noqa: E402
 
 _BENCHMARK_DIR = Path(__file__).resolve().parent
 _SETUP_MARKER = _BENCHMARK_DIR / ".setup_complete"
@@ -86,12 +84,15 @@ def build_parser():
 
 
 def main():
-    _check_setup_complete()
     parser = build_parser()
     args = parser.parse_args()
+
+    if not args.dry_run:
+        _check_setup_complete()
+
     setup_logging(args.verbose)
 
-    cfg = parse_config(args.config)
+    parse_config(args.config)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

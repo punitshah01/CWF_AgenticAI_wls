@@ -92,7 +92,7 @@ from common.system_metadata import get_system_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
-from common.cli_utils import setup_tee_logging, teardown_logging, load_workload_config
+from common.cli_utils import setup_tee_logging, teardown_logging
 
 BENCHMARK = "webarena"
 BENCHMARK_DIR = Path(__file__).resolve().parent
@@ -553,9 +553,9 @@ def main() -> None:
         bench_results = run_evaluation(args, run_id)
 
         if not args.dry_run:
-            print(f"\n[telemetry] Stopping collectors and processing EMON...")
+            print("\n[telemetry] Stopping collectors and processing EMON...")
             tm.stop(process_emon=args.collect_emon, sockets=cpu.get_sockets())
-            print(f"[telemetry] Collection complete.")
+            print("[telemetry] Collection complete.")
 
         common_data: OrderedDict = OrderedDict()
         common_data.update(bench_results)
@@ -577,7 +577,7 @@ def main() -> None:
         print(f"  Tasks Completed  : {bench_results.get('tasks_completed', 'N/A')}/{bench_results.get('n_tasks', 'N/A')}")
         print(f"  Success Rate     : {bench_results.get('success_rate', 'N/A')}%")
         print(f"  Total Runtime    : {bench_results.get('total_runtime_s', 'N/A')}s")
-        print(f"\n  Power Metrics (RAPL):")
+        print("\n  Power Metrics (RAPL):")
         print(f"    Package Power  : {tm.pkg_power_w:.1f}W (mean)")
         print(f"    DRAM Power     : {tm.dram_power_w:.1f}W (mean)")
         if args.collect_emon:
@@ -596,7 +596,8 @@ def main() -> None:
         print("\n\n[webarena] Interrupted by user.")
     except Exception as exc:
         print(f"\n[webarena] Fatal error: {exc}")
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
     finally:
         teardown_logging()

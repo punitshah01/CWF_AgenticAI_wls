@@ -103,8 +103,12 @@ SYSTEM_PKGS = {
 # ---------------------------------------------------------------------------
 
 class Color:
-    BLUE = "\033[94m"; GREEN = "\033[92m"; YELLOW = "\033[93m"
-    RED  = "\033[91m"; BOLD  = "\033[1m";  RESET  = "\033[0m"
+    BLUE = "\033[94m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
 
 def log(msg: str, level: str = "info") -> None:
     c = {"info": Color.BLUE, "ok": Color.GREEN, "warn": Color.YELLOW, "error": Color.RED}.get(level, "")
@@ -161,7 +165,7 @@ def install_system_pkgs(os_family: str, dry_run: bool) -> None:
         run(f"sudo {pm} install -y {kvm} {sys_libs}", dry_run=dry_run)
         run("sudo systemctl enable --now libvirtd", dry_run=dry_run)
     else:
-        run(f"sudo apt-get update -y", dry_run=dry_run)
+        run("sudo apt-get update -y", dry_run=dry_run)
         run(f"sudo {pm} install -y {kvm} {sys_libs}", dry_run=dry_run)
     log("System packages installed", "ok")
 

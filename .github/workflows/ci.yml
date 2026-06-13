@@ -91,9 +91,12 @@ jobs:
         run: sudo apt-get install -y shellcheck
       - name: Run shellcheck on all .sh files
         run: |
-          find . -name "*.sh" \
-            -not -path "./.venv/*" \
-            -print0 \
+          shfiles=$(find . -name "*.sh" -not -path "./.venv/*")
+          if [ -z "$shfiles" ]; then
+            echo "shellcheck: no .sh files found — skipping"
+            exit 0
+          fi
+          echo "$shfiles" | tr '\n' '\0' \
           | xargs -0 shellcheck --severity=warning
           echo "shellcheck: all files OK"
 
