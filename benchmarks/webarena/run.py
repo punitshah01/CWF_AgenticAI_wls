@@ -185,43 +185,44 @@ def _ensure_webarena_patched() -> None:
     # than fragile in-place regex patching, we replace the whole file so the result
     # is always syntactically valid and idempotent across re-runs / partial states.
     _tf = WORKDIR / "llms" / "tokenizers.py"
-    if _tf.exists():
-        _good = (
-            "from typing import Any\n"
-            "\n"
-            "import tiktoken\n"
-            "from transformers import LlamaTokenizer  # type: ignore\n"
-            "\n"
-            "\n"
-            "class Tokenizer(object):\n"
-            "    def __init__(self, provider: str, model_name: str) -> None:\n"
-            "        if provider == \"openai\":\n"
-            "            try:\n"
-            "                self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
-            "            except KeyError:\n"
-            "                # CWF: non-OpenAI model name (e.g. llama3.1:405b). Fallback.\n"
-            "                self.tokenizer = tiktoken.get_encoding(\"cl100k_base\")\n"
-            "        elif provider == \"huggingface\":\n"
-            "            self.tokenizer = LlamaTokenizer.from_pretrained(model_name)\n"
-            "            # turn off adding special tokens automatically\n"
-            "            self.tokenizer.add_special_tokens = False  # type: ignore[attr-defined]\n"
-            "            self.tokenizer.add_bos_token = False  # type: ignore[attr-defined]\n"
-            "            self.tokenizer.add_eos_token = False  # type: ignore[attr-defined]\n"
-            "        else:\n"
-            "            raise NotImplementedError\n"
-            "\n"
-            "    def encode(self, text: str) -> list[int]:\n"
-            "        return self.tokenizer.encode(text)\n"
-            "\n"
-            "    def decode(self, ids: list[int]) -> str:\n"
-            "        return self.tokenizer.decode(ids)\n"
-            "\n"
-            "    def __call__(self, text: str) -> list[int]:\n"
-            "        return self.tokenizer.encode(text)\n"
-        )
-        if _tf.read_text() != _good:
+    _good = (
+        "from typing import Any\n"
+        "\n"
+        "import tiktoken\n"
+        "from transformers import LlamaTokenizer  # type: ignore\n"
+        "\n"
+        "\n"
+        "class Tokenizer(object):\n"
+        "    def __init__(self, provider: str, model_name: str) -> None:\n"
+        "        if provider == \"openai\":\n"
+        "            try:\n"
+        "                self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
+        "            except KeyError:\n"
+        "                # CWF: non-OpenAI model name (e.g. llama3.1:405b). Fallback.\n"
+        "                self.tokenizer = tiktoken.get_encoding(\"cl100k_base\")\n"
+        "        elif provider == \"huggingface\":\n"
+        "            self.tokenizer = LlamaTokenizer.from_pretrained(model_name)\n"
+        "            # turn off adding special tokens automatically\n"
+        "            self.tokenizer.add_special_tokens = False  # type: ignore[attr-defined]\n"
+        "            self.tokenizer.add_bos_token = False  # type: ignore[attr-defined]\n"
+        "            self.tokenizer.add_eos_token = False  # type: ignore[attr-defined]\n"
+        "        else:\n"
+        "            raise NotImplementedError\n"
+        "\n"
+        "    def encode(self, text: str) -> list[int]:\n"
+        "        return self.tokenizer.encode(text)\n"
+        "\n"
+        "    def decode(self, ids: list[int]) -> str:\n"
+        "        return self.tokenizer.decode(ids)\n"
+        "\n"
+        "    def __call__(self, text: str) -> list[int]:\n"
+        "        return self.tokenizer.encode(text)\n"
+    )
+    if _tf.parent.exists():
+        _tf.parent.mkdir(parents=True, exist_ok=True)
+        if not _tf.exists() or _tf.read_text() != _good:
             _tf.write_text(_good)
-            print("[webarena] Rewrote tokenizers.py with deterministic CWF version")
+            print("[webarena] Wrote deterministic tokenizers.py")
 
     # Patch 2: run.py — ZeroDivisionError when scores list is empty
     _rf = WORKDIR / "run.py"
