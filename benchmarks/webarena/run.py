@@ -180,21 +180,55 @@ def _ensure_webarena_patched() -> None:
     if not WORKDIR.exists():
         return
 
-    # Patch 1: tokenizers.py — KeyError on non-OpenAI model names + IndentationError fallback
+    # Patch 1: tokenizers.py — KeyError on non-OpenAI model names + robust indentation self-heal
     _tf = WORKDIR / "llms" / "tokenizers.py"
     if _tf.exists():
         _c = _tf.read_text()
-        # First, check for and fix IndentationError: try: without proper indent after if
-        if "if " in _c and "\n    try:" not in _c and "\ntry:" in _c:
-            # Upstream has try: without indent; fix all occurrences
-            _c = _re.sub(
-                r'^(\s+if\s+[^:]+:)\n(try:)',
-                r'\1\n    \2',
-                _c,
-                flags=_re.MULTILINE,
-            )
+        # First, normalize a common malformed construct:
+        #   if ...:
+        #   try:
+        #       ...
+        #   except ...:
+        #       ...
+        # where try/except are not indented under the if-block.
+        _lines = _c.splitlines()
+        _changed_indent = False
+        for _idx in range(len(_lines) - 1):
+            _m_if = _re.match(r'^(\s*)if\s+[^:]+:\s*$', _lines[_idx])
+            if not _m_if:
+                continue
+            _if_indent = _m_if.group(1)
+            _j = _idx + 1
+            while _j < len(_lines) and _lines[_j].strip() == "":
+                _j += 1
+            if _j >= len(_lines):
+                continue
+            _next = _lines[_j]
+            _next_indent = _next[: len(_next) - len(_next.lstrip(" "))]
+            _next_token = _next.lstrip(" ")
+            if _next_token.startswith("try:") and len(_next_indent) <= len(_if_indent):
+                _k = _j
+                while _k < len(_lines):
+                    _cur = _lines[_k]
+                    if _cur.strip() == "":
+                        _k += 1
+                        continue
+                    _cur_indent = _cur[: len(_cur) - len(_cur.lstrip(" "))]
+                    # stop at dedent to outer scope
+                    if len(_cur_indent) < len(_if_indent):
+                        break
+                    if len(_cur_indent) == len(_if_indent) and _cur.lstrip(" ").startswith(("elif ", "else:")):
+                        break
+                    _lines[_k] = f"{_if_indent}    {_cur.lstrip(' ')}"
+                    _changed_indent = True
+                    _k += 1
+
+        if _changed_indent:
+            _c = "\n".join(_lines)
+            if _tf.read_text().endswith("\n"):
+                _c += "\n"
             _tf.write_text(_c)
-            print("[webarena] Fixed tokenizers.py: IndentationError (try: indentation)")
+            print("[webarena] Fixed tokenizers.py: normalized if/try indentation")
             _c = _tf.read_text()  # re-read for next patch
         
         # Now apply the try-except wrap if not already present
@@ -209,6 +243,36 @@ def _ensure_webarena_patched() -> None:
                         f"{i}except KeyError:\n{i}    self.tokenizer = tiktoken.get_encoding(\"cl100k_base\")")
             _tf.write_text(_pat.sub(_wrap, _c))
             print("[webarena] Patched tokenizers.py: try-except wrap for KeyError")
+
+        # Final guard: if still syntactically invalid, rewrite the gpt-tokenizer block canonically.
+        _c = _tf.read_text()
+        try:
+            compile(_c, str(_tf), "exec")
+        except IndentationError:
+            _block_pat = _re.compile(
+                r'^(?P<i>\s*)if\s+"gpt"\s+in\s+model_name:\s*\n'
+                r'(?:(?P=i).*$\n)+?'
+                r'(?P=i)else:\s*\n'
+                r'(?:(?P=i).*$\n)?',
+                _re.MULTILINE,
+            )
+
+            def _canon(m):
+                i = m.group("i")
+                return (
+                    f"{i}if \"gpt\" in model_name:\n"
+                    f"{i}    try:\n"
+                    f"{i}        self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
+                    f"{i}    except KeyError:\n"
+                    f"{i}        self.tokenizer = tiktoken.get_encoding(\"cl100k_base\")\n"
+                    f"{i}else:\n"
+                    f"{i}    self.tokenizer = tiktoken.get_encoding(\"cl100k_base\")\n"
+                )
+
+            _fixed = _block_pat.sub(_canon, _c, count=1)
+            if _fixed != _c:
+                _tf.write_text(_fixed)
+                print("[webarena] Repaired tokenizers.py: canonical tokenizer block")
 
     # Patch 2: run.py — ZeroDivisionError when scores list is empty
     _rf = WORKDIR / "run.py"
