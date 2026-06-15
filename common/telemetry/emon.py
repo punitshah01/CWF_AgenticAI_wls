@@ -78,6 +78,17 @@ class EmonCollector:
         self.status = TelemetryStatus.ERROR
         return False
 
+    def _ensure_drivers_loaded(self) -> bool:
+        """Check if SEP kernel drivers are loaded; auto-load if not."""
+        r = subprocess.run(
+            ["lsmod"], capture_output=True, text=True,
+        )
+        if "sepint" in r.stdout or "sep5" in r.stdout:
+            return True
+        # Drivers not loaded — try to load them
+        print("[emon] SEP drivers not loaded, loading now …")
+        return self.reload_drivers()
+
     def is_available(self) -> bool:
         return self._check_installation()
 
@@ -124,22 +135,22 @@ class EmonCollector:
         if not self.is_available():
             print("[emon] Not available — skipping")
             return False
+        if not self._ensure_drivers_loaded():
+            print("[emon] Failed to load SEP drivers — EMON collection will be incomplete")
+            # Continue anyway — some events may still work via software counters
 
         sep_vars    = self.sep_dir / "sep_vars.sh"
         output_file = self.output_dir / f"{session_name}.txt"
         self.output_file = output_file
 
-        # pnpwls pattern: emon -collect-edp (auto-includes EDP preprocessing info)
-        if duration_s is not None:
-            sample_args = f"-t {int(duration_s)} -s 1"
-            dur_label   = f"{duration_s}s"
-        else:
-            sample_args = ""
-            dur_label   = "until stop()"
+        # pnpwls pattern: emon -collect-edp runs indefinitely until emon -stop.
+        # The -t flag does NOT work with -collect-edp. We handle duration via a
+        # timer thread that calls stop_collection() after duration_s seconds.
+        dur_label = f"{duration_s}s" if duration_s else "until stop()"
 
         cmd = (
             f"source {sep_vars} && "
-            f"emon -collect-edp {sample_args} > {output_file} 2>&1"
+            f"emon -collect-edp > {output_file} 2>&1"
         )
         try:
             self.process = subprocess.Popen(
@@ -150,15 +161,15 @@ class EmonCollector:
             self.status = TelemetryStatus.RUNNING
             print(f"[emon] Collection started → {output_file} (pid={self.process.pid}, duration={dur_label})")
 
-            # If duration was given, spawn a watchdog so status reflects
-            # when emon exits naturally.
+            # If duration was given, spawn a timer that calls emon -stop after N seconds.
             if duration_s is not None:
-                def _watchdog():
-                    self.process.wait()
+                def _auto_stop():
+                    import time as _time
+                    _time.sleep(duration_s)
                     if self.status == TelemetryStatus.RUNNING:
-                        self.status = TelemetryStatus.STOPPED
+                        self.stop_collection()
                         print(f"[emon] Collection finished after {duration_s}s → {self.output_file}")
-                threading.Thread(target=_watchdog, daemon=True).start()
+                threading.Thread(target=_auto_stop, daemon=True).start()
 
             return True
         except Exception as exc:
