@@ -3,10 +3,11 @@
 setup/setup_emon.py — Install Intel SEP (EMON) + configure pyedp and TMC client.
 
 Matches the pnpwls/setup/setup_emon.sh approach:
+  0. Pre-flight checks: system dependencies (gcc, make, tar, wget/curl, git)
   1. Ensure kernel-devel is installed (via setup_kernel_devel.py)
   2. Download SEP beta from Intel artifactory (dpgpaivsoworkloads-or-local)
   3. Extract and run sep-installer.sh --accept-license -ni -u -i
-  4. Install pyedp Python dependencies + pip install .
+  4. Install pyedp Python dependencies + pip install . (with PIP_BREAK_SYSTEM_PACKAGES=1)
   5. Clone and install TMC (tools.dcso.telemetry.client)
   6. Load SEP kernel drivers via insmod-sep
   7. Verify with check_emon_setup.py
@@ -17,11 +18,13 @@ Usage:
   python3 setup/setup_emon.py --dry-run
   python3 setup/setup_emon.py --skip-install   # only configure, assume SEP already installed
   python3 setup/setup_emon.py --skip-kernel-devel  # skip kernel-devel step
+  python3 setup/setup_emon.py --skip-tmc       # skip TMC client installation
   python3 setup/setup_emon.py --verify-only    # just run check_emon_setup.py
 
 Environment variables:
   SEP_ARTIFACTORY_URL   Override download URL base
   SEP_VERSION           Override SEP version string (full package name without .tar.bz2)
+  PIP_BREAK_SYSTEM_PACKAGES  Set to '1' to bypass PEP 668 protections (auto-set by script)
 """
 
 import argparse
@@ -72,6 +75,53 @@ def _run(cmd: str, dry_run: bool = False, check: bool = False,
         stderr=subprocess.PIPE if capture else None,
         text=True,
     )
+
+
+def check_system_dependencies(dry_run: bool) -> bool:
+    """Check for required system tools: gcc, make, tar, wget/curl, git.
+    
+    These are needed for:
+      - gcc/make: compiling SEP kernel drivers
+      - tar: extracting SEP tarball
+      - wget/curl: downloading SEP from artifactory
+      - git: cloning TMC telemetry client
+    
+    Returns True if all checks pass, False otherwise.
+    """
+    print("\n[INFO] Checking system dependencies ...")
+    if dry_run:
+        print("[ OK ] (dry-run) skipping system dependency checks")
+        return True
+    
+    required_tools = {
+        "gcc": "compiler (build-essential/gcc package)",
+        "make": "build tool (make package)",
+        "tar": "archive tool (tar package)",
+        "git": "version control (git package)",
+    }
+    
+    # Also check for wget OR curl (at least one)
+    download_tool = "wget" if shutil.which("wget") else ("curl" if shutil.which("curl") else None)
+    
+    missing = []
+    for tool, desc in required_tools.items():
+        if not shutil.which(tool):
+            missing.append(f"{tool} ({desc})")
+    
+    if not download_tool:
+        missing.append("wget or curl (for downloading SEP from artifactory)")
+    
+    if missing:
+        print("[FAIL] Missing system tools:", file=sys.stderr)
+        for item in missing:
+            print(f"       - {item}", file=sys.stderr)
+        print("[FAIL] Install missing tools and retry. Example:", file=sys.stderr)
+        print("       sudo dnf install gcc make tar git wget        # RHEL/CentOS/Fedora", file=sys.stderr)
+        print("       sudo apt-get install build-essential git wget # Debian/Ubuntu", file=sys.stderr)
+        return False
+    
+    print("[ OK ] All required system tools are available")
+    return True
 
 
 def ensure_python_pip(dry_run: bool) -> bool:
@@ -238,14 +288,28 @@ def configure_pyedp(dry_run: bool) -> None:
     if not ensure_python_pip(dry_run):
         sys.exit(1)
 
+    # Set PIP_BREAK_SYSTEM_PACKAGES to bypass PEP 668 protections (matches pnpwls/setup/setup_emon.sh)
+    env = os.environ.copy()
+    env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+
     # Full pyedp dependency list
     pkgs = " ".join(PYEDP_PIP_PACKAGES)
-    _run(f"python3 -m pip install -U {pkgs}", dry_run)
+    cmd = f"python3 -m pip install -U {pkgs}"
+    print(f"  $ {cmd}", flush=True)
+    if not dry_run:
+        r = subprocess.run(cmd, shell=True, env=env)
+        if r.returncode != 0:
+            print(f"[WARN] pip install failed with exit code {r.returncode}", file=sys.stderr)
 
     if PYEDP_DIR.exists():
         # SEP shipped pyedp source under /opt/intel/sep — install from there
         print(f"[ OK ] pyedp directory: {PYEDP_DIR}")
-        _run(f"cd {PYEDP_DIR} && python3 -m pip install .", dry_run)
+        cmd = f"cd {PYEDP_DIR} && python3 -m pip install ."
+        print(f"  $ {cmd}", flush=True)
+        if not dry_run:
+            r = subprocess.run(cmd, shell=True, env=env)
+            if r.returncode != 0:
+                print(f"[WARN] pyedp pip install failed with exit code {r.returncode}", file=sys.stderr)
     else:
         # SEP 5.58 beta: search the whole SEP tree for any pyedp directory
         candidates = list(SEP_ROOT.rglob("pyedp.py")) if not dry_run else []
@@ -314,6 +378,11 @@ def main() -> None:
 
     if args.verify_only:
         sys.exit(verify(args.dry_run))
+
+    # Pre-flight: check system dependencies
+    if not args.skip_install and not check_system_dependencies(args.dry_run):
+        print("[ERROR] System dependency check failed.", file=sys.stderr)
+        sys.exit(1)
 
     # Step 1: kernel-devel (required to build SEP drivers)
     if not args.skip_kernel_devel and not args.skip_install:
