@@ -272,18 +272,31 @@ class EmonCollector:
             print(f"[emon] mpp.py not found: {mpp_script}")
             return None
 
-        # mpp.py imports pandas. Fail fast with a clear message instead of a long traceback.
-        dep_check = subprocess.run(
-            ["python3", "-c", "import pandas"],
-            capture_output=True,
-            text=True,
-        )
-        if dep_check.returncode != 0:
-            print(
-                "[emon] EDP skipped: Python dependency 'pandas' is missing for mpp.py.\n"
-                "[emon]   Fix once with: python3 -m pip install -U pandas pyarrow openpyxl tables xlsxwriter"
+        # mpp.py imports a stack of third-party modules. Auto-install any that are missing
+        # so the post-process step doesn't silently skip after a long collection.
+        _required = ["pandas", "numpy", "pytz", "defusedxml", "openpyxl", "xlsxwriter"]
+        _missing = []
+        for _mod in _required:
+            _r = subprocess.run(["python3", "-c", f"import {_mod}"], capture_output=True, text=True)
+            if _r.returncode != 0:
+                _missing.append(_mod)
+        if _missing:
+            print(f"[emon] Installing missing EDP deps: {' '.join(_missing)}")
+            _env = os.environ.copy()
+            _env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+            _inst = subprocess.run(
+                ["python3", "-m", "pip", "install", "--quiet", "-U", *_missing],
+                capture_output=True, text=True, env=_env,
             )
-            return None
+            if _inst.returncode != 0:
+                print(
+                    "[emon] EDP skipped: failed to install required deps for mpp.py.\n"
+                    f"[emon]   Missing: {' '.join(_missing)}\n"
+                    f"[emon]   pip stderr: {_inst.stderr[-300:]}\n"
+                    "[emon]   Fix manually with: python3 -m pip install -U "
+                    + ' '.join(_required)
+                )
+                return None
 
         edp_xml_path = self.edp_dir / metadata['edp_xml_file']
         edp_chart_path = self.edp_dir / metadata['edp_chart_file']

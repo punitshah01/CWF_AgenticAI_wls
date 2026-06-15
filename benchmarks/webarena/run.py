@@ -261,6 +261,33 @@ def _ensure_webarena_patched() -> None:
             _al.write_text(_c.replace(_old_line, _new_line))
             print("[webarena] Patched auto_login.py: Playwright timeout 30s → 90s (all page contexts)")
 
+    # Patch 5: openai_utils.py — default 600s OpenAI request_timeout is too short for
+    # CPU-only inference of large models (e.g. llama3.1:405b). Inject request_timeout
+    # from WEBARENA_REQUEST_TIMEOUT env var (default 7200s = 2h) into all create() calls.
+    _ou = WORKDIR / "llms" / "providers" / "openai_utils.py"
+    if _ou.exists():
+        _c = _ou.read_text()
+        if "request_timeout=" not in _c:
+            _to = (
+                'request_timeout=int(__import__("os").environ.get("WEBARENA_REQUEST_TIMEOUT", "7200"))'
+            )
+            # openai.ChatCompletion.create / .acreate and openai.Completion.create / .acreate
+            _patched = _re.sub(
+                r'(openai\.(?:Chat)?Completion\.a?create\(\s*#\s*type:\s*ignore)',
+                rf'\1\n            {_to},',
+                _c,
+            )
+            if _patched == _c:
+                # Fallback: match without the trailing comment
+                _patched = _re.sub(
+                    r'(openai\.(?:Chat)?Completion\.a?create\()',
+                    rf'\1\n            {_to},',
+                    _c,
+                )
+            if _patched != _c:
+                _ou.write_text(_patched)
+                print("[webarena] Patched openai_utils.py: request_timeout via WEBARENA_REQUEST_TIMEOUT")
+
 
 def _preflight_emon() -> None:
     """Print EMON availability diagnostic; does not abort."""
@@ -425,6 +452,9 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     env["OPENAI_API_BASE"] = base_url
     # Point the evaluator's fuzzy/ua match to the local model instead of gpt-4
     env.setdefault("WEBARENA_EVAL_MODEL", model_name)
+    # Long OpenAI client timeout for slow CPU-only inference of large models.
+    # Used by the openai_utils.py patch (see _ensure_webarena_patched).
+    env.setdefault("WEBARENA_REQUEST_TIMEOUT", "7200")
     # Suppress beartype PEP 585 deprecation warnings from gymnasium (noisy, not actionable)
     env["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
 
