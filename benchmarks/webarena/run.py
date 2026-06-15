@@ -144,8 +144,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ollama-model",    default="", metavar="NAME",
                     help="Override the Ollama model name (e.g. 'llama3.1:70b'). "
                          "If empty, auto-maps from --model (llama3:8b / 32b / 70b).")
-    p.add_argument("--inference-cores", type=int, default=96)
-    p.add_argument("--env-cores",       type=int, default=48)
+    # Default cores: auto-scale to platform total leaving 32 for OS+Playwright.
+    # Falls back to 96 if CPUInfo is unavailable.
+    try:
+        _total_cores = CPUInfo().get_total_cores()
+        _default_inf_cores = max(96, _total_cores - 32)
+        _default_env_cores = 32
+    except Exception:
+        _default_inf_cores = 96
+        _default_env_cores = 48
+    p.add_argument("--inference-cores", type=int, default=_default_inf_cores)
+    p.add_argument("--env-cores",       type=int, default=_default_env_cores)
     p.add_argument("--start-idx",       type=int, default=0)
     p.add_argument("--end-idx",         type=int, default=812)
     p.add_argument("--llm-port",        type=int, default=11434,
