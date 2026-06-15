@@ -278,11 +278,18 @@ class EmonCollector:
             return None
 
         # Calculate sample range (pnpwls pattern)
+        # EDP on CWF with 3570 events: each sample takes ~7-8s (full event group rotation).
+        # A 180s collection yields ~24 samples. If total < begin+dirty, process all samples.
         total_samples = metadata['total_samples']
-        if total_samples > 0:
-            end_sample = max(begin_sample + 1, total_samples - dirty_samples)
+        if total_samples > (begin_sample + dirty_samples):
+            end_sample = total_samples - dirty_samples
+        elif total_samples > 0:
+            # Too few samples for trimming — process all of them
+            begin_sample = 1
+            end_sample = total_samples
         else:
-            end_sample = begin_sample + 1
+            begin_sample = 1
+            end_sample = 1
         print(f"[emon] Samples: total={total_samples}, processing range [{begin_sample}, {end_sample}]")
 
         out_dir = self.output_dir / f"emon_{emon_file.stem}"
