@@ -26,8 +26,15 @@ from typing import Optional, Tuple, Dict
 
 
 # ── Constants (mirror pnpwls defaults) ────────────────────────────────────────
-DEFAULT_BEGIN_SAMPLE  = 700
-DEFAULT_DIRTY_SAMPLES = 400
+# pnpwls uses 700/400 for high-copy RATE workloads (>32 copies, long warmup).
+# Agentic workloads are single-threaded LLM inference — more like SPEED/low-copy.
+# Use conservative defaults: skip 50 warmup, 50 cooldown.
+DEFAULT_BEGIN_SAMPLE  = 50
+DEFAULT_DIRTY_SAMPLES = 50
+
+# For reference if someone passes high-copy RATE style workloads:
+RATE_HIGH_COPY_BEGIN  = 700
+RATE_HIGH_COPY_DIRTY  = 400
 
 SEP_DIR_DEFAULT = "/opt/intel/sep"
 
