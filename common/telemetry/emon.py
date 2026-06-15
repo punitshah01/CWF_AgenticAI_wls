@@ -277,29 +277,31 @@ class EmonCollector:
         _required = ["pandas", "numpy", "pytz", "defusedxml", "openpyxl", "xlsxwriter"]
         _missing = []
         for _mod in _required:
-            _r = subprocess.run([\"python3\", \"-c\", f\"import {_mod}\"], capture_output=True, text=True)
+            _r = subprocess.run(["python3", "-c", f"import {_mod}"], capture_output=True, text=True)
             if _r.returncode != 0:
                 _missing.append(_mod)
         if _missing:
-            print(f\"[emon] Installing missing EDP deps: {' '.join(_missing)}\")
+            print(f"[emon] Installing missing EDP deps: {' '.join(_missing)}")
             _env = os.environ.copy()
-            _env[\"PIP_BREAK_SYSTEM_PACKAGES\"] = \"1\"
+            _env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
             # Try with Intel proxy first (lab machines block pypi.org directly)
-            _pip_cmd_base = [\"python3\", \"-m\", \"pip\", \"install\", \"--quiet\", \"-U\"]
+            _pip_cmd_base = ["python3", "-m", "pip", "install", "--quiet", "-U"]
             _success = False
-            for _proxy in [\"http://proxy.intel.com:911\", \"http://proxy01.iind.intel.com:911\", None]:
-                _cmd = _pip_cmd_base + ([\"--proxy\", _proxy] if _proxy else []) + _missing
+            _inst = None
+            for _proxy in ["http://proxy.intel.com:911", "http://proxy01.iind.intel.com:911", None]:
+                _cmd = _pip_cmd_base + (["--proxy", _proxy] if _proxy else []) + _missing
                 _inst = subprocess.run(_cmd, capture_output=True, text=True, env=_env)
                 if _inst.returncode == 0:
                     _success = True
                     break
             if not _success:
+                _stderr = _inst.stderr[-300:] if _inst else ""
                 print(
-                    \"[emon] EDP skipped: failed to install required deps for mpp.py.\\n\"
-                    f\"[emon]   Missing: {' '.join(_missing)}\\n\"
-                    f\"[emon]   pip stderr: {_inst.stderr[-300:]}\\n\"
-                    \"[emon]   Fix manually with: pip install --proxy http://proxy.intel.com:911 -U \"
-                    + ' '.join(_missing)
+                    "[emon] EDP skipped: failed to install required deps for mpp.py.\n"
+                    f"[emon]   Missing: {' '.join(_missing)}\n"
+                    f"[emon]   pip stderr: {_stderr}\n"
+                    "[emon]   Fix manually with: pip install --proxy http://proxy.intel.com:911 -U "
+                    + " ".join(_missing)
                 )
                 return None
 
