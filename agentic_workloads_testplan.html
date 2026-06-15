@@ -869,37 +869,20 @@ tr:hover { background: #eef5ff; }
 
     <h3 class="section-subtitle">6.3 WebArena Setup</h3>
     <div class="code-block">
-<span class="comment"># Install WebArena</span>
-<span class="cmd">git clone</span> <span class="value">https://github.com/web-arena-x/webarena.git</span>
-<span class="cmd">cd</span> <span class="value">webarena</span>
-<span class="cmd">conda create -n</span> <span class="value">webarena python=3.10</span>
-<span class="cmd">pip install -r</span> <span class="value">requirements.txt</span>
-<span class="cmd">playwright install</span>
-<span class="cmd">pip install -e</span> <span class="value">.</span>
+<span class="comment"># From this repo root: fully automated setup (Docker, venv, upstream clone, login data, Ollama)</span>
+<span class="cmd">python3</span> <span class="value">benchmarks/webarena/setup.py --host &lt;host_ip&gt; --model llama3.1:70b</span>
 
-<span class="comment"># Deploy all 5 web services (Docker)</span>
-<span class="comment"># Follow: environment_docker/README.md</span>
-<span class="cmd">export</span> <span class="value">SHOPPING="localhost:7770"</span>
-<span class="cmd">export</span> <span class="value">SHOPPING_ADMIN="localhost:7780/admin"</span>
-<span class="cmd">export</span> <span class="value">REDDIT="localhost:9999"</span>
-<span class="cmd">export</span> <span class="value">GITLAB="localhost:8023"</span>
-<span class="cmd">export</span> <span class="value">MAP="localhost:3000"</span>
-<span class="cmd">export</span> <span class="value">WIKIPEDIA="localhost:8888/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing"</span>
+<span class="comment"># Activate the generated WebArena environment in each new shell</span>
+<span class="cmd">source</span> <span class="value">~/activate_webarena.sh</span>
 
-<span class="comment"># Generate test configs</span>
-<span class="cmd">python scripts/generate_test_data.py</span>
+<span class="comment"># Smoke test: first 10 tasks via the CWF wrapper runner</span>
+<span class="cmd">python3</span> <span class="value">benchmarks/webarena/run.py --model 70b --start-idx 0 --end-idx 10 --run-id webarena_smoke</span>
 
-<span class="comment"># Get auto-login cookies</span>
-<span class="cmd">mkdir -p</span> <span class="value">./.auth</span>
-<span class="cmd">python browser_env/auto_login.py</span>
+<span class="comment"># Full run with EMON collection</span>
+<span class="cmd">python3</span> <span class="value">benchmarks/webarena/run.py --model 70b --collect-emon --run-id webarena_full</span>
 
-<span class="comment"># Run evaluation (812 tasks)</span>
-<span class="cmd">python run.py</span> \
-    <span class="flag">--instruction_path</span> <span class="value">agent/prompts/jsons/p_cot_id_actree_2s.json</span> \
-    <span class="flag">--test_start_idx</span> <span class="value">0</span> \
-    <span class="flag">--test_end_idx</span> <span class="value">812</span> \
-    <span class="flag">--model</span> <span class="value">local_llm</span> \
-    <span class="flag">--result_dir</span> <span class="value">./results_cwf</span>
+<span class="comment"># Optional: explicitly pin the pulled Ollama tag if needed</span>
+<span class="cmd">python3</span> <span class="value">benchmarks/webarena/run.py --model 70b --ollama-model llama3.1:70b --collect-emon</span>
     </div>
 
     <h3 class="section-subtitle">6.4 OSWorld Setup</h3>
@@ -1323,7 +1306,7 @@ tr:hover { background: #eef5ff; }
 
 <!-- Footer -->
 <div class="footer">
-    <p>Intel Confidential | DPG PAIV SO | Platform PnP Benchmark Suite | Generated: 2026-06-04</p>
+    <p>Intel Confidential | DPG PAIV SO | Platform PnP Benchmark Suite | Generated: 2026-06-15</p>
     <p style="margin-top:4px;">Clearwater Forest Agentic AI Workload Characterization — Test Plan v1.0</p>
 </div>
 
