@@ -272,12 +272,16 @@ class EmonCollector:
             print(f"[emon] mpp.py not found: {mpp_script}")
             return None
 
-        # mpp.py imports a stack of third-party modules. Auto-install any that are missing
-        # so the post-process step doesn't silently skip after a long collection.
+        # mpp.py imports a stack of third-party modules. Use system python (/usr/bin/python3)
+        # for EDP since deps are installed there (venv python may lack network for pip).
+        _sys_python = "/usr/bin/python3"
+        if not os.path.exists(_sys_python):
+            _sys_python = "python3"  # fallback
+
         _required = ["pandas", "numpy", "pytz", "defusedxml", "openpyxl", "xlsxwriter"]
         _missing = []
         for _mod in _required:
-            _r = subprocess.run(["python3", "-c", f"import {_mod}"], capture_output=True, text=True)
+            _r = subprocess.run([_sys_python, "-c", f"import {_mod}"], capture_output=True, text=True)
             if _r.returncode != 0:
                 _missing.append(_mod)
         if _missing:
@@ -285,7 +289,7 @@ class EmonCollector:
             _env = os.environ.copy()
             _env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
             # Try with Intel proxy first (lab machines block pypi.org directly)
-            _pip_cmd_base = ["python3", "-m", "pip", "install", "--quiet", "-U"]
+            _pip_cmd_base = [_sys_python, "-m", "pip", "install", "--quiet", "-U"]
             _success = False
             _inst = None
             for _proxy in ["http://proxy.intel.com:911", "http://proxy01.iind.intel.com:911", None]:
@@ -300,7 +304,7 @@ class EmonCollector:
                     "[emon] EDP skipped: failed to install required deps for mpp.py.\n"
                     f"[emon]   Missing: {' '.join(_missing)}\n"
                     f"[emon]   pip stderr: {_stderr}\n"
-                    "[emon]   Fix manually with: pip install --proxy http://proxy.intel.com:911 -U "
+                    "[emon]   Fix manually with: /usr/bin/python3 -m pip install --proxy http://proxy.intel.com:911 -U "
                     + " ".join(_missing)
                 )
                 return None
@@ -312,7 +316,7 @@ class EmonCollector:
         view_flags = [f"--{v}" for v in views if v]
 
         cmd = [
-            'python3', str(mpp_script),
+            _sys_python, str(mpp_script),
             '-i', str(emon_file),
             '-f', str(edp_chart_path),
             '-m', str(edp_xml_path),
