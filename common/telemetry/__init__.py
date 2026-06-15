@@ -53,6 +53,8 @@ from .emon import (                            # noqa: F401
     read_emon_core_view,
     read_emon_system_view,
     get_emon_csv_header,
+    extract_emon_sample_range,
+    count_emon_samples,
 )
 
 # pnpwls compatibility stubs for constants not used in CWF but referenced

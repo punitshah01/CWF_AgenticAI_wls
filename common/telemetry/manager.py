@@ -118,14 +118,73 @@ class TelemetryManager:
         self,
         process_emon: bool = True,
         sockets: int = 1,
+        begin_sample: Optional[int] = None,
+        dirty_samples: Optional[int] = None,
+        views: Optional[tuple] = None,
+        parallel_threads: Optional[int] = None,
+        workload_log: Optional[Path] = None,
+        workload_start_epoch: Optional[float] = None,
+        workload_end_epoch: Optional[float] = None,
+        start_marker: str = "",
+        end_marker: str = "",
+        archive_raw: bool = True,
     ) -> None:
-        """Stop all collectors; optionally post-process EMON with EDP."""
+        """Stop all collectors; optionally post-process EMON with EDP.
+
+        Sample range (pnpwls pattern):
+        - If workload_log + markers (or epoch times) are provided, the EMON sample
+          range is auto-extracted from workload timestamps → EMON timestamps.
+        - Otherwise, falls back to begin_sample / dirty_samples or emon.py defaults.
+        """
+        # Import here to avoid circular imports
+        from .emon import (
+            DEFAULT_BEGIN_SAMPLE,
+            DEFAULT_DIRTY_SAMPLES,
+            extract_emon_sample_range,
+        )
+
         if "emon" in self._active:
             self.emon.stop_collection()
             if process_emon and self.emon.output_file and self.emon.output_file.exists():
                 print(f"[telemetry] Processing EMON with EDP (platform={self.platform}, sockets={sockets})…")
+
+                # Resolve sample range: try workload-log mapping first (pnpwls pattern)
+                _begin = begin_sample if begin_sample is not None else DEFAULT_BEGIN_SAMPLE
+                _dirty = dirty_samples if dirty_samples is not None else DEFAULT_DIRTY_SAMPLES
+
+                if workload_log or workload_start_epoch is not None:
+                    actual_start, actual_end = extract_emon_sample_range(
+                        emon_file=self.emon.output_file,
+                        workload_log=workload_log,
+                        start_marker=start_marker,
+                        end_marker=end_marker,
+                        workload_start_epoch=workload_start_epoch,
+                        workload_end_epoch=workload_end_epoch,
+                    )
+                    if actual_start > 0 and actual_end > actual_start:
+                        print(f"[telemetry] Using workload-mapped EMON range: [{actual_start}, {actual_end}]")
+                        # Override dirty_samples implicitly via passing begin/end via _begin
+                        # process_emon_with_edp expects begin + dirty, so emit equivalent
+                        # by treating actual_end as the new "non-dirty" boundary.
+                        _begin = actual_start
+                        # We can't pass explicit end; use a small dirty so process_emon
+                        # computes end_sample = total - dirty. Convert:
+                        try:
+                            from .emon import count_emon_samples
+                            _total = count_emon_samples(self.emon.output_file)
+                            _dirty = max(0, _total - actual_end)
+                        except Exception:
+                            pass
+
+                _views = views or ("socket-view",)
                 self.emon_output_dir = self.emon.process_emon_with_edp(
-                    platform=self.platform, sockets=sockets,
+                    platform=self.platform,
+                    sockets=sockets,
+                    begin_sample=_begin,
+                    dirty_samples=_dirty,
+                    views=_views,
+                    parallel_threads=parallel_threads,
+                    archive_raw=archive_raw,
                 )
                 if self.emon_output_dir:
                     self.emon_ready = True

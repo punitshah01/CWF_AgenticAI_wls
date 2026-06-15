@@ -465,3 +465,104 @@ def get_emon_csv_header(emon_csv: Path) -> str:
             return f.readline().strip()
     except Exception:
         return ""
+
+
+# ── Sample range extraction (pnpwls pattern) ──────────────────────────────────
+
+def count_emon_samples(emon_file: Path) -> int:
+    """Count total EMON samples in a raw .txt file by counting INST_RETIRED.ANY occurrences."""
+    try:
+        with open(emon_file, 'r') as f:
+            return sum(1 for line in f if 'INST_RETIRED.ANY' in line)
+    except Exception:
+        return 0
+
+
+def extract_emon_sample_range(
+    emon_file: Path,
+    workload_log: Optional[Path] = None,
+    start_marker: str = "",
+    end_marker: str = "",
+    workload_start_epoch: Optional[float] = None,
+    workload_end_epoch: Optional[float] = None,
+) -> Tuple[int, int]:
+    """
+    Map a workload's start/end time to EMON sample indices.
+
+    pnpwls pattern (run_spec.py: extract_emon_sample_range):
+    - Parse workload log for start/end timestamps (epoch or marker-based)
+    - Parse EMON file timestamps (MM/DD/YYYY HH:MM:SS.fraction format)
+    - Find first sample at/after workload_start, last sample at/before workload_end
+
+    Args:
+        emon_file: Path to raw EMON .txt file
+        workload_log: Optional log file to extract timestamps from
+        start_marker/end_marker: Regex patterns in workload_log; group 1 = epoch seconds
+        workload_start_epoch/workload_end_epoch: Direct epoch overrides (if log parsing not used)
+
+    Returns:
+        (start_sample, end_sample) — both 1-based; (0, 0) if extraction failed.
+    """
+    try:
+        import time as _time
+
+        start_ts = workload_start_epoch
+        end_ts = workload_end_epoch
+
+        # Try parsing markers from workload log if epoch values not given
+        if workload_log and workload_log.exists() and (start_ts is None or end_ts is None):
+            content = workload_log.read_text(errors="ignore")
+            if start_marker and start_ts is None:
+                m = re.search(start_marker, content)
+                if m:
+                    try:
+                        start_ts = float(m.group(1))
+                    except (ValueError, IndexError):
+                        pass
+            if end_marker and end_ts is None:
+                m = re.search(end_marker, content)
+                if m:
+                    try:
+                        end_ts = float(m.group(1))
+                    except (ValueError, IndexError):
+                        pass
+
+        if start_ts is None or end_ts is None:
+            return (0, 0)
+
+        # Parse EMON file for per-sample timestamps
+        if not emon_file.exists():
+            return (0, 0)
+
+        ts_re = re.compile(r'(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\.(\d+)')
+        start_sample = 0
+        end_sample = 0
+        sample_num = 0
+
+        with open(emon_file, 'r') as f:
+            for line in f:
+                # Each sample is marked by INST_RETIRED.ANY appearing once per rotation
+                if 'INST_RETIRED.ANY' in line:
+                    sample_num += 1
+                    continue
+                m = ts_re.match(line)
+                if not m:
+                    continue
+                mo, dy, yr, hh, mm, ss, frac = m.groups()
+                try:
+                    ts = _time.mktime(_time.strptime(
+                        f"{yr} {mo} {dy} {hh} {mm} {ss}", "%Y %m %d %H %M %S"
+                    )) + float(f"0.{frac}")
+                except Exception:
+                    continue
+                if start_sample == 0 and ts >= start_ts:
+                    start_sample = max(1, sample_num)
+                if ts <= end_ts:
+                    end_sample = max(1, sample_num)
+
+        if start_sample > 0 and end_sample >= start_sample:
+            return (start_sample, end_sample)
+        return (0, 0)
+    except Exception as e:
+        print(f"[emon] extract_emon_sample_range error: {e}")
+        return (0, 0)
