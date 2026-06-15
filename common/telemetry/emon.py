@@ -235,13 +235,16 @@ class EmonCollector:
         begin_sample: int = DEFAULT_BEGIN_SAMPLE,
         dirty_samples: int = DEFAULT_DIRTY_SAMPLES,
         views: Tuple[str, ...] = ("socket-view",),
+        parallel_threads: Optional[int] = None,
+        archive_raw: bool = True,
     ) -> Optional[Path]:
         """
         Post-process an EMON file with mpp.py (EDP).
 
         pnpwls pattern:
         1. Extract EDP metadata from EMON output
-        2. Call: python3 /opt/intel/sep/config/edp/pyedp/mpp.py -i <input> -f <chart> -m <xml> -o <output> --socket-view
+        2. Call: python3 mpp.py -i <input> -f <chart> -m <xml> -o <output> -p <threads> --views
+        3. Archive raw EMON .txt to .tar.gz (non-blocking)
 
         Returns the output directory on success, None on failure.
         """
@@ -256,12 +259,13 @@ class EmonCollector:
             print(f"[emon] Could not extract EDP metadata from {emon_file}")
             return None
 
-        # Calculate sample range
+        # Calculate sample range (pnpwls pattern)
         total_samples = metadata['total_samples']
         if total_samples > 0:
             end_sample = max(begin_sample + 1, total_samples - dirty_samples)
         else:
-            end_sample = 1000
+            end_sample = begin_sample + 1
+        print(f"[emon] Samples: total={total_samples}, processing range [{begin_sample}, {end_sample}]")
 
         out_dir = self.output_dir / f"emon_{emon_file.stem}"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -272,12 +276,13 @@ class EmonCollector:
             print(f"[emon] mpp.py not found: {mpp_script}")
             return None
 
-        # mpp.py imports a stack of third-party modules. Use system python (/usr/bin/python3)
-        # for EDP since deps are installed there (venv python may lack network for pip).
+        # Use system python (/usr/bin/python3) for EDP — deps installed there,
+        # venv python may lack packages and can't pip install (no network to pypi.org).
         _sys_python = "/usr/bin/python3"
         if not os.path.exists(_sys_python):
             _sys_python = "python3"  # fallback
 
+        # Verify deps with system python; auto-install if missing (pnpwls: PIP_BREAK_SYSTEM_PACKAGES=1)
         _required = ["pandas", "numpy", "pytz", "defusedxml", "openpyxl", "xlsxwriter"]
         _missing = []
         for _mod in _required:
@@ -288,7 +293,6 @@ class EmonCollector:
             print(f"[emon] Installing missing EDP deps: {' '.join(_missing)}")
             _env = os.environ.copy()
             _env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
-            # Try with Intel proxy first (lab machines block pypi.org directly)
             _pip_cmd_base = [_sys_python, "-m", "pip", "install", "--quiet", "-U"]
             _success = False
             _inst = None
@@ -312,6 +316,13 @@ class EmonCollector:
         edp_xml_path = self.edp_dir / metadata['edp_xml_file']
         edp_chart_path = self.edp_dir / metadata['edp_chart_file']
 
+        # Determine parallelism for mpp.py (pnpwls: num_cores * 3 // 4)
+        if parallel_threads is None:
+            try:
+                parallel_threads = max(1, os.cpu_count() * 3 // 4)
+            except Exception:
+                parallel_threads = 48
+
         # Build view flags
         view_flags = [f"--{v}" for v in views if v]
 
@@ -323,30 +334,61 @@ class EmonCollector:
             '-o', str(out_dir / 'processed'),
             '-b', str(begin_sample),
             '-e', str(end_sample),
+            '-p', str(parallel_threads),
         ] + view_flags
 
         print("[emon] Running EDP post-processing …")
         print(f"[emon]   Command: {' '.join(cmd)}")
-        
+
         try:
-            r = subprocess.run(
+            # Stream output live (pnpwls pattern) so user sees progress
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=600,
+                bufsize=1,
             )
-            if r.returncode == 0:
+            for line in process.stdout:
+                print(f"[emon/mpp] {line}", end='', flush=True)
+            process.wait(timeout=600)
+
+            if process.returncode == 0:
                 print(f"[emon] EDP post-processing complete → {out_dir}")
+                # Archive raw EMON file to save disk (pnpwls pattern)
+                if archive_raw:
+                    self._archive_raw_emon(emon_file)
                 return out_dir
             else:
-                print(f"[emon] EDP failed: {r.stderr[-500:]}")
+                print(f"[emon] EDP failed with exit code {process.returncode}")
                 return None
         except subprocess.TimeoutExpired:
-            print("[emon] EDP timed out")
+            process.kill()
+            print("[emon] EDP timed out (600s)")
             return None
         except Exception as e:
             print(f"[emon] EDP error: {e}")
             return None
+
+    def _archive_raw_emon(self, emon_file: Path, timeout: int = 180) -> None:
+        """Compress raw EMON file (often 50-100MB+) to save disk. Non-blocking on failure."""
+        if not emon_file.exists():
+            return
+        archive = emon_file.with_suffix('.txt.tar.gz')
+        try:
+            r = subprocess.run(
+                f"tar czf {archive} -C {emon_file.parent} {emon_file.name}",
+                shell=True, capture_output=True, text=True, timeout=timeout,
+            )
+            if r.returncode == 0:
+                emon_file.unlink()
+                print(f"[emon] Archived raw data → {archive.name}")
+            else:
+                print(f"[emon] Archive warning: tar failed ({r.returncode}), raw file kept")
+        except subprocess.TimeoutExpired:
+            print(f"[emon] Archive skipped: tar timed out ({timeout}s)")
+        except Exception as e:
+            print(f"[emon] Archive skipped: {e}")
 
 
 # ── CSV readers ───────────────────────────────────────────────────────────────
