@@ -180,10 +180,24 @@ def _ensure_webarena_patched() -> None:
     if not WORKDIR.exists():
         return
 
-    # Patch 1: tokenizers.py — KeyError on non-OpenAI model names
+    # Patch 1: tokenizers.py — KeyError on non-OpenAI model names + IndentationError fallback
     _tf = WORKDIR / "llms" / "tokenizers.py"
     if _tf.exists():
         _c = _tf.read_text()
+        # First, check for and fix IndentationError: try: without proper indent after if
+        if "if " in _c and "\n    try:" not in _c and "\ntry:" in _c:
+            # Upstream has try: without indent; fix all occurrences
+            _c = _re.sub(
+                r'^(\s+if\s+[^:]+:)\n(try:)',
+                r'\1\n    \2',
+                _c,
+                flags=_re.MULTILINE,
+            )
+            _tf.write_text(_c)
+            print("[webarena] Fixed tokenizers.py: IndentationError (try: indentation)")
+            _c = _tf.read_text()  # re-read for next patch
+        
+        # Now apply the try-except wrap if not already present
         _pat = _re.compile(
             r'^( +)(self\.tokenizer = tiktoken\.encoding_for_model\(model_name\))\s*$',
             _re.MULTILINE,
@@ -194,7 +208,7 @@ def _ensure_webarena_patched() -> None:
                 return (f"{i}try:\n{i}    self.tokenizer = tiktoken.encoding_for_model(model_name)\n"
                         f"{i}except KeyError:\n{i}    self.tokenizer = tiktoken.get_encoding(\"cl100k_base\")")
             _tf.write_text(_pat.sub(_wrap, _c))
-            print("[webarena] Patched tokenizers.py")
+            print("[webarena] Patched tokenizers.py: try-except wrap for KeyError")
 
     # Patch 2: run.py — ZeroDivisionError when scores list is empty
     _rf = WORKDIR / "run.py"
