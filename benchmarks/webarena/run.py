@@ -457,7 +457,8 @@ def _run_with_per_task_emon(
     _task_idx: list = [None]
     _edp_threads: list = []        # background EDP post-processing threads
 
-    TARGET_SAMPLES = 180  # always process this many samples from the center of each task
+    TARGET_SAMPLES = 600  # process up to 600 samples from the center of each task's collection;
+                           # if fewer than 600 were collected, process all of them
 
     def _cancel_timer() -> None:
         t = _pending_timer[0]

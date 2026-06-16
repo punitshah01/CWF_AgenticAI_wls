@@ -252,7 +252,7 @@ class EmonCollector:
         sockets: int = 1,
         begin_sample: int = DEFAULT_BEGIN_SAMPLE,
         dirty_samples: int = DEFAULT_DIRTY_SAMPLES,
-        target_samples: int = 180,
+        target_samples: int = 600,
         views: Tuple[str, ...] = ("socket-view",),
         parallel_threads: Optional[int] = None,
         archive_raw: bool = True,
@@ -269,7 +269,7 @@ class EmonCollector:
           - Always extract a window of exactly `target_samples` from the collected data.
           - The window is centered in the total collection — equal warmup/cooldown trimmed.
           - If total <= target_samples: use all samples (b=1, e=total).
-          - This is rate-agnostic: works whether 1 sample = 1s or 1 sample = 7.5s.
+          - Default target is 600. Works whether 1 sample = 1s or 1 sample = 7.5s (CWF).
 
         Returns the output directory on success, None on failure.
         """
