@@ -252,6 +252,7 @@ class EmonCollector:
         sockets: int = 1,
         begin_sample: int = DEFAULT_BEGIN_SAMPLE,
         dirty_samples: int = DEFAULT_DIRTY_SAMPLES,
+        target_samples: int = 180,
         views: Tuple[str, ...] = ("socket-view",),
         parallel_threads: Optional[int] = None,
         archive_raw: bool = True,
@@ -263,6 +264,12 @@ class EmonCollector:
         1. Extract EDP metadata from EMON output
         2. Call: python3 mpp.py -i <input> -f <chart> -m <xml> -o <output> -p <threads> --views
         3. Archive raw EMON .txt to .tar.gz (non-blocking)
+
+        Sample window logic (target_samples):
+          - Always extract a window of exactly `target_samples` from the collected data.
+          - The window is centered in the total collection — equal warmup/cooldown trimmed.
+          - If total <= target_samples: use all samples (b=1, e=total).
+          - This is rate-agnostic: works whether 1 sample = 1s or 1 sample = 7.5s.
 
         Returns the output directory on success, None on failure.
         """
@@ -277,20 +284,28 @@ class EmonCollector:
             print(f"[emon] Could not extract EDP metadata from {emon_file}")
             return None
 
-        # Calculate sample range (pnpwls pattern)
-        # EDP on CWF with 3570 events: each sample takes ~7-8s (full event group rotation).
-        # A 180s collection yields ~24 samples. If total < begin+dirty, process all samples.
+        # Calculate sample range.
+        # Goal: always deliver exactly `target_samples` to mpp.py, centered in the collection.
+        # Example: total=300, target=180 → skip 60 on each side → b=61, e=240
+        # Example: total=24,  target=180 → total < target → use all  → b=1,  e=24
         total_samples = metadata['total_samples']
-        if total_samples > (begin_sample + dirty_samples):
-            end_sample = total_samples - dirty_samples
-        elif total_samples > 0:
-            # Too few samples for trimming — process all of them
+        if total_samples <= 0:
+            begin_sample = 1
+            end_sample = 1
+        elif total_samples <= target_samples:
+            # Not enough samples to fill the window — process everything.
             begin_sample = 1
             end_sample = total_samples
         else:
-            begin_sample = 1
-            end_sample = 1
-        print(f"[emon] Samples: total={total_samples}, processing range [{begin_sample}, {end_sample}]")
+            # Center a window of target_samples inside the total collection.
+            margin = (total_samples - target_samples) // 2
+            begin_sample = margin + 1
+            end_sample = begin_sample + target_samples - 1
+        print(
+            f"[emon] Samples: total={total_samples}, target={target_samples}, "
+            f"processing range [{begin_sample}, {end_sample}] "
+            f"({end_sample - begin_sample + 1} samples)"
+        )
 
         out_dir = self.output_dir / f"emon_{emon_file.stem}"
         out_dir.mkdir(parents=True, exist_ok=True)

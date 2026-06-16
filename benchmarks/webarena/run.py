@@ -452,11 +452,12 @@ def _run_with_per_task_emon(
     import re
     import threading
 
-    _current_emon: list = [None]   # list so closure can mutate
-    _pending_timer: list = [None]  # threading.Timer (cancelable)
+    _current_emon: list = [None]   # EmonCollector in flight
+    _pending_timer: list = [None]  # threading.Timer for delayed start (cancelable)
     _task_idx: list = [None]
+    _edp_threads: list = []        # background EDP post-processing threads
 
-    SEP_VARS = Path(sep_dir) / "sep_vars.sh"
+    TARGET_SAMPLES = 180  # always process this many samples from the center of each task
 
     def _cancel_timer() -> None:
         t = _pending_timer[0]
@@ -464,11 +465,28 @@ def _run_with_per_task_emon(
             t.cancel()
             _pending_timer[0] = None
 
-    def _stop_emon() -> None:
+    def _stop_and_process_emon() -> None:
+        """Stop the current EMON collector and kick off EDP post-processing in background."""
         ec = _current_emon[0]
-        if ec is not None:
-            ec.stop_collection()
-            _current_emon[0] = None
+        if ec is None:
+            return
+        _current_emon[0] = None
+        ec.stop_collection()
+
+        # Fire EDP post-processing in a daemon thread so the next task is not blocked.
+        # Uses target_samples=TARGET_SAMPLES: always processes exactly 180 samples
+        # (or all samples if fewer than 180 were collected), centered in the collection.
+        def _edp():
+            print(f"[per-task-emon] Post-processing {ec.output_file} (target={TARGET_SAMPLES} samples)…")
+            result = ec.process_emon_with_edp(target_samples=TARGET_SAMPLES)
+            if result:
+                print(f"[per-task-emon] EDP done → {result}")
+            else:
+                print(f"[per-task-emon] EDP failed for {ec.output_file}")
+
+        t = threading.Thread(target=_edp, daemon=True)
+        t.start()
+        _edp_threads.append(t)
 
     def _start_emon(idx: int, task_dir: Path) -> None:
         """Called from timer thread: create a new collector and start EMON."""
@@ -492,11 +510,11 @@ def _run_with_per_task_emon(
 
             # ── [Config file]: /tmp/.../N.json ──────────────────────────────
             # Marks the very start of a new task. Cancel any pending start timer
-            # and stop any in-progress EMON from the previous task.
+            # and stop any in-progress EMON from the previous task (+ trigger EDP).
             m = re.search(r'\[Config file\].*?[/\\](\d+)\.json', line)
             if m:
                 _cancel_timer()
-                _stop_emon()
+                _stop_and_process_emon()
                 _task_idx[0] = int(m.group(1))
 
             # ── [Intent]: ... ───────────────────────────────────────────────
@@ -512,15 +530,21 @@ def _run_with_per_task_emon(
                 t.start()
 
             # ── [Result] / [Unhandled Error] ────────────────────────────────
-            # Task finished (pass or fail). Stop EMON immediately.
+            # Task finished (pass or fail). Stop EMON and start EDP post-processing.
             if "[Result]" in line or "[Unhandled Error]" in line:
                 _cancel_timer()
-                _stop_emon()
+                _stop_and_process_emon()
 
     finally:
         # Ensure cleanup if the subprocess exits unexpectedly.
         _cancel_timer()
-        _stop_emon()
+        _stop_and_process_emon()
+        # Wait for all background EDP post-processing threads before returning.
+        pending = [t for t in _edp_threads if t.is_alive()]
+        if pending:
+            print(f"[per-task-emon] Waiting for {len(pending)} EDP post-processing job(s) to finish…")
+            for t in pending:
+                t.join()
 
     proc.wait()
     return proc.returncode
