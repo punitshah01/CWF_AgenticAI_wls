@@ -8,7 +8,7 @@ LLM inference server and headless Playwright Chromium.
 Usage:
   python3 benchmarks/webarena/run.py --model 8b                    # smoke test with Ollama
   python3 benchmarks/webarena/run.py --model 70b --inference-cores 96
-  python3 benchmarks/webarena/run.py --model 8b --collect-emon     # with EMON collection
+  python3 benchmarks/webarena/run.py --model 8b --emon             # per-task EMON collection
   python3 benchmarks/webarena/run.py --start-idx 0 --end-idx 10   # subset
   python3 benchmarks/webarena/run.py --dry-run
 
@@ -28,8 +28,7 @@ Arguments:
   --collect-emon     Enable EMON collection (needs SEP)
   --collect-rapl     Enable RAPL power monitoring (default: on)
   --collect-temp     Enable temperature monitoring
-  --emon-warmup      Seconds to wait after workload starts before EMON begins default: 60
-  --emon-duration    Seconds to collect EMON data (0 = full run)           default: 120
+  --emon             Collect EMON per task (start 2s after [Intent], stop at [Result])
   --dry-run          Print config, do not run
 """
 
@@ -161,17 +160,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--llm-port",        type=int, default=11434,
                     help="LLM API port (11434=Ollama, 8000=llama.cpp)")
     p.add_argument("--run-id",          default="")
-    p.add_argument("--collect-emon",    action="store_true",
-                    help="Enable EMON collection (requires /opt/intel/sep)")
+    p.add_argument("--emon",            action="store_true",
+                    help="Collect a separate EMON file per task (start 2s after [Intent], stop at [Result]). "
+                         "Saves to telemetry/task_N/emon_task_N.txt. Requires /opt/intel/sep.")
     p.add_argument("--collect-rapl",    action="store_true", default=True)
     p.add_argument("--collect-temp",    action="store_true")
-    p.add_argument("--emon-warmup",     type=int, default=60,
-                    help="Seconds to wait after workload starts before EMON collection begins (skip cold-start transient)")
-    p.add_argument("--emon-duration",   type=int, default=180,
-                    help="Seconds to collect EMON data; 0 = collect until workload ends (default: 180s = 3 min steady-state)")
-    p.add_argument("--per-task-emon",   action="store_true",
-                    help="Collect a separate EMON file per task (start 2s after [Intent], stop at [Result]). "
-                         "Saves to telemetry/task_N/emon_task_N.txt. Mutually exclusive with --collect-emon.")
     p.add_argument("--dry-run",         action="store_true")
     return p.parse_args()
 
@@ -665,10 +658,7 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
         cmd = eval_cmd
 
     run_rc: int
-    if getattr(args, "per_task_emon", False):
-        # Per-task EMON mode: stream output line-by-line and bracket each task
-        # with its own emon -collect-edp / emon -stop cycle.
-        out_dir_tel = REPO_ROOT / "results" / BENCHMARK / args.run_id if args.run_id else results_dir.parent
+    if args.emon:
         run_rc = _run_with_per_task_emon(
             cmd=cmd,
             cwd=str(WORKDIR),
@@ -710,9 +700,7 @@ def main() -> None:
     if not args.dry_run:
         _preflight_playwright()
         _preflight_ollama_model(args, _resolve_model_name(args))
-        if args.collect_emon and not args.per_task_emon:
-            _preflight_emon()
-        if args.per_task_emon:
+        if args.emon:
             _preflight_emon()
         _ensure_magento_configured()
 
@@ -733,26 +721,19 @@ def main() -> None:
         print(f"  Model     : {args.model} ({model_label})  Inf-cores: {args.inference_cores}")
         print(f"  Tasks     : {args.start_idx}..{args.end_idx}")
         print(f"  Output    : {out_dir}")
-        if args.per_task_emon:
+        if args.emon:
             print(f"  EMON      : per-task mode (start +2s after [Intent], stop at [Result])")
-        elif args.collect_emon:
-            dur_label = f"{args.emon_duration}s" if args.emon_duration > 0 else "full run"
-            print(f"  EMON      : warmup={args.emon_warmup}s, collect {dur_label}")
         print(f"{'='*60}\n")
 
         sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
                                        experiment_name=BENCHMARK)
-        emon_duration = args.emon_duration if args.emon_duration > 0 else None
-        # --per-task-emon manages its own EMON collectors; disable global EMON in TM.
-        _global_emon = args.collect_emon and not args.per_task_emon
+        # --emon manages its own per-task EmonCollector instances; global EMON disabled in TM.
         tm = TelemetryManager(
             output_dir=str(out_dir / "telemetry"),
             platform=platform,
-            collect_emon=_global_emon,
+            collect_emon=False,
             collect_rapl=args.collect_rapl,
             collect_temp=args.collect_temp,
-            emon_warmup_s=args.emon_warmup,
-            emon_duration_s=emon_duration,
         )
         _TELEMETRY_MANAGER = tm
 
@@ -763,7 +744,7 @@ def main() -> None:
 
         if not args.dry_run:
             print("\n[telemetry] Stopping collectors and processing EMON...")
-            tm.stop(process_emon=args.collect_emon, sockets=cpu.get_sockets())
+            tm.stop(process_emon=False, sockets=cpu.get_sockets())
             print("[telemetry] Collection complete.")
 
         common_data: OrderedDict = OrderedDict()
@@ -789,16 +770,7 @@ def main() -> None:
         print("\n  Power Metrics (RAPL):")
         print(f"    Package Power  : {tm.pkg_power_w:.1f}W (mean)")
         print(f"    DRAM Power     : {tm.dram_power_w:.1f}W (mean)")
-        if args.collect_emon and not args.per_task_emon:
-            print(f"\n  EMON Collection  : {tm.emon_ready}")
-            if tm.emon_output_dir:
-                print(f"    Output Dir     : {tm.emon_output_dir}")
-                csv_files = list(tm.emon_output_dir.glob("*.csv"))
-                if csv_files:
-                    print(f"    CSV Files      : {len(csv_files)} generated")
-                    for cf in csv_files[:3]:
-                        print(f"                   - {cf.name}")
-        if args.per_task_emon:
+        if args.emon:
             task_dirs = sorted((out_dir / "telemetry").glob("task_*")) if (out_dir / "telemetry").exists() else []
             print(f"\n  Per-task EMON    : {len(task_dirs)} task(s) collected")
             for td in task_dirs[:5]:
