@@ -321,7 +321,20 @@ class EmonCollector:
             _pip_cmd_base = [_sys_python, "-m", "pip", "install", "--quiet", "-U"]
             _success = False
             _inst = None
-            for _proxy in ["http://proxy.intel.com:911", "http://proxy01.iind.intel.com:911", None]:
+            # Build proxy candidates: env var first (user may have set it), then known Intel
+            # lab proxies in priority order, then direct (None = no --proxy flag).
+            _env_proxy = (os.environ.get("https_proxy") or os.environ.get("http_proxy") or "").strip()
+            _proxies = []
+            if _env_proxy:
+                _proxies.append(_env_proxy)
+            _proxies += [
+                "http://proxy-dmz.intel.com:912",
+                "http://proxy-dmz.intel.com:911",
+                "http://proxy.intel.com:911",
+                "http://proxy01.iind.intel.com:911",
+                None,  # direct — last resort
+            ]
+            for _proxy in _proxies:
                 _cmd = _pip_cmd_base + (["--proxy", _proxy] if _proxy else []) + _missing
                 _inst = subprocess.run(_cmd, capture_output=True, text=True, env=_env)
                 if _inst.returncode == 0:
@@ -333,7 +346,8 @@ class EmonCollector:
                     "[emon] EDP skipped: failed to install required deps for mpp.py.\n"
                     f"[emon]   Missing: {' '.join(_missing)}\n"
                     f"[emon]   pip stderr: {_stderr}\n"
-                    "[emon]   Fix manually with: /usr/bin/python3 -m pip install --proxy http://proxy.intel.com:911 -U "
+                    "[emon]   Fix: set https_proxy=http://proxy-dmz.intel.com:912 then re-run, or:\n"
+                    "  /usr/bin/python3 -m pip install --proxy http://proxy-dmz.intel.com:912 -U "
                     + " ".join(_missing)
                 )
                 return None
