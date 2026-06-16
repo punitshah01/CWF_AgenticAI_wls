@@ -92,6 +92,7 @@ from common.system_metadata import get_system_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
+from common.telemetry.emon import EmonCollector
 from common.cli_utils import setup_tee_logging, teardown_logging
 
 BENCHMARK = "webarena"
@@ -168,6 +169,9 @@ def parse_args() -> argparse.Namespace:
                     help="Seconds to wait after workload starts before EMON collection begins (skip cold-start transient)")
     p.add_argument("--emon-duration",   type=int, default=180,
                     help="Seconds to collect EMON data; 0 = collect until workload ends (default: 180s = 3 min steady-state)")
+    p.add_argument("--per-task-emon",   action="store_true",
+                    help="Collect a separate EMON file per task (start 2s after [Intent], stop at [Result]). "
+                         "Saves to telemetry/task_N/emon_task_N.txt. Mutually exclusive with --collect-emon.")
     p.add_argument("--dry-run",         action="store_true")
     return p.parse_args()
 
@@ -429,6 +433,106 @@ def build_run_id(args: argparse.Namespace) -> str:
     return f"webarena_{args.model}_{args.inference_cores}c_{n}tasks_{ts}"
 
 
+def _run_with_per_task_emon(
+    cmd: list,
+    cwd: str,
+    env: dict,
+    out_dir: Path,
+    sep_dir: str = "/opt/intel/sep",
+    start_delay_s: float = 2.0,
+) -> int:
+    """Run the WebArena evaluation subprocess and collect a separate EMON file
+    per task.
+
+    Watches the streamed output for the three key log patterns emitted by
+    WebArena's run.py:
+
+        [Config file]: /tmp/.../N.json          → task index N (task is starting)
+        [Intent]: ...                            → 2 s later: start emon -collect-edp
+        [Result] ...  OR  [Unhandled Error] ...  → stop emon -stop immediately
+
+    Each task's raw EMON data is saved to:
+        <out_dir>/telemetry/task_<N>/emon_task_<N>.txt
+
+    Returns the subprocess exit code.
+    """
+    import re
+    import threading
+
+    _current_emon: list = [None]   # list so closure can mutate
+    _pending_timer: list = [None]  # threading.Timer (cancelable)
+    _task_idx: list = [None]
+
+    SEP_VARS = Path(sep_dir) / "sep_vars.sh"
+
+    def _cancel_timer() -> None:
+        t = _pending_timer[0]
+        if t is not None:
+            t.cancel()
+            _pending_timer[0] = None
+
+    def _stop_emon() -> None:
+        ec = _current_emon[0]
+        if ec is not None:
+            ec.stop_collection()
+            _current_emon[0] = None
+
+    def _start_emon(idx: int, task_dir: Path) -> None:
+        """Called from timer thread: create a new collector and start EMON."""
+        task_dir.mkdir(parents=True, exist_ok=True)
+        ec = EmonCollector(sep_dir=sep_dir, output_dir=str(task_dir))
+        if ec.start_collection(session_name=f"emon_task_{idx}", duration_s=None):
+            _current_emon[0] = ec
+        else:
+            print(f"[per-task-emon] WARNING: EMON start failed for task {idx}")
+
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1,
+    )
+
+    try:
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+
+            # ── [Config file]: /tmp/.../N.json ──────────────────────────────
+            # Marks the very start of a new task. Cancel any pending start timer
+            # and stop any in-progress EMON from the previous task.
+            m = re.search(r'\[Config file\].*?[/\\](\d+)\.json', line)
+            if m:
+                _cancel_timer()
+                _stop_emon()
+                _task_idx[0] = int(m.group(1))
+
+            # ── [Intent]: ... ───────────────────────────────────────────────
+            # Task has been parsed and the agent is about to act. Schedule EMON
+            # start after start_delay_s to skip the model's first cold token.
+            if "[Intent]:" in line and _task_idx[0] is not None:
+                idx = _task_idx[0]
+                task_dir = out_dir / "telemetry" / f"task_{idx}"
+                print(f"[per-task-emon] Task {idx}: EMON starts in {start_delay_s:.0f}s → {task_dir / f'emon_task_{idx}.txt'}")
+                t = threading.Timer(start_delay_s, _start_emon, args=(idx, task_dir))
+                t.daemon = True
+                _pending_timer[0] = t
+                t.start()
+
+            # ── [Result] / [Unhandled Error] ────────────────────────────────
+            # Task finished (pass or fail). Stop EMON immediately.
+            if "[Result]" in line or "[Unhandled Error]" in line:
+                _cancel_timer()
+                _stop_emon()
+
+    finally:
+        # Ensure cleanup if the subprocess exits unexpectedly.
+        _cancel_timer()
+        _stop_emon()
+
+    proc.wait()
+    return proc.returncode
+
+
 def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     """Invoke WebArena run.py. Returns result dict."""
     # Always apply patches to the WebArena clone before running — idempotent.
@@ -560,7 +664,20 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     else:
         cmd = eval_cmd
 
-    run_rc = subprocess.run(cmd, cwd=str(WORKDIR), env=env).returncode
+    run_rc: int
+    if getattr(args, "per_task_emon", False):
+        # Per-task EMON mode: stream output line-by-line and bracket each task
+        # with its own emon -collect-edp / emon -stop cycle.
+        out_dir_tel = REPO_ROOT / "results" / BENCHMARK / args.run_id if args.run_id else results_dir.parent
+        run_rc = _run_with_per_task_emon(
+            cmd=cmd,
+            cwd=str(WORKDIR),
+            env=env,
+            out_dir=results_dir.parent,  # results/{run_id}/
+            sep_dir="/opt/intel/sep",
+        )
+    else:
+        run_rc = subprocess.run(cmd, cwd=str(WORKDIR), env=env).returncode
     if run_rc != 0:
         print(f"[ERROR] WebArena evaluation command failed with exit code {run_rc}", file=sys.stderr)
     results["total_runtime_s"] = str(round(time.time() - t0, 1))
@@ -593,7 +710,9 @@ def main() -> None:
     if not args.dry_run:
         _preflight_playwright()
         _preflight_ollama_model(args, _resolve_model_name(args))
-        if args.collect_emon:
+        if args.collect_emon and not args.per_task_emon:
+            _preflight_emon()
+        if args.per_task_emon:
             _preflight_emon()
         _ensure_magento_configured()
 
@@ -614,7 +733,9 @@ def main() -> None:
         print(f"  Model     : {args.model} ({model_label})  Inf-cores: {args.inference_cores}")
         print(f"  Tasks     : {args.start_idx}..{args.end_idx}")
         print(f"  Output    : {out_dir}")
-        if args.collect_emon:
+        if args.per_task_emon:
+            print(f"  EMON      : per-task mode (start +2s after [Intent], stop at [Result])")
+        elif args.collect_emon:
             dur_label = f"{args.emon_duration}s" if args.emon_duration > 0 else "full run"
             print(f"  EMON      : warmup={args.emon_warmup}s, collect {dur_label}")
         print(f"{'='*60}\n")
@@ -622,10 +743,12 @@ def main() -> None:
         sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
                                        experiment_name=BENCHMARK)
         emon_duration = args.emon_duration if args.emon_duration > 0 else None
+        # --per-task-emon manages its own EMON collectors; disable global EMON in TM.
+        _global_emon = args.collect_emon and not args.per_task_emon
         tm = TelemetryManager(
             output_dir=str(out_dir / "telemetry"),
             platform=platform,
-            collect_emon=args.collect_emon,
+            collect_emon=_global_emon,
             collect_rapl=args.collect_rapl,
             collect_temp=args.collect_temp,
             emon_warmup_s=args.emon_warmup,
@@ -666,7 +789,7 @@ def main() -> None:
         print("\n  Power Metrics (RAPL):")
         print(f"    Package Power  : {tm.pkg_power_w:.1f}W (mean)")
         print(f"    DRAM Power     : {tm.dram_power_w:.1f}W (mean)")
-        if args.collect_emon:
+        if args.collect_emon and not args.per_task_emon:
             print(f"\n  EMON Collection  : {tm.emon_ready}")
             if tm.emon_output_dir:
                 print(f"    Output Dir     : {tm.emon_output_dir}")
@@ -675,6 +798,15 @@ def main() -> None:
                     print(f"    CSV Files      : {len(csv_files)} generated")
                     for cf in csv_files[:3]:
                         print(f"                   - {cf.name}")
+        if args.per_task_emon:
+            task_dirs = sorted((out_dir / "telemetry").glob("task_*")) if (out_dir / "telemetry").exists() else []
+            print(f"\n  Per-task EMON    : {len(task_dirs)} task(s) collected")
+            for td in task_dirs[:5]:
+                txt_files = list(td.glob("*.txt"))
+                status = f"{txt_files[0].name} ({txt_files[0].stat().st_size // 1024}KB)" if txt_files else "empty"
+                print(f"    {td.name}: {status}")
+            if len(task_dirs) > 5:
+                print(f"    ... and {len(task_dirs)-5} more")
         print(f"\n  Results Location : {out_dir}")
         print(f"{'='*70}\n")
 
