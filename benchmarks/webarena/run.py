@@ -51,7 +51,7 @@ import urllib.error
 import urllib.request
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 # Suppress beartype PEP 585 deprecation warnings from third-party dependencies
 # (gymnasium uses typing.Mapping[...] instead of collections.abc.Mapping[...]).
@@ -107,6 +107,9 @@ from benchmarks.webarena.lib.ollama_metrics import OllamaMetricsProxy
 BENCHMARK = "webarena"
 BENCHMARK_DIR = Path(__file__).resolve().parent
 _SETUP_MARKER = BENCHMARK_DIR / ".setup_complete"
+
+# Maximum characters of intent text displayed in the per-task summary table.
+_INTENT_DISPLAY_MAX_LEN = 40
 
 # ── Global state for signal-handler cleanup (mirrors pnpwls pattern) ─────────
 _TELEMETRY_MANAGER = None
@@ -493,9 +496,9 @@ def _run_with_task_tracking(
     env: dict,
     out_dir: Path,
     proxy: Optional["OllamaMetricsProxy"] = None,
-    on_config: Optional[callable] = None,
-    on_intent: Optional[callable] = None,
-    on_result: Optional[callable] = None,
+    on_config: Optional[Callable[[int], None]] = None,
+    on_intent: Optional[Callable[[int], None]] = None,
+    on_result: Optional[Callable[[int, str], None]] = None,
 ) -> tuple:
     """Run the WebArena evaluation subprocess with per-task tracking.
 
@@ -584,7 +587,7 @@ def _run_with_task_tracking(
             (task_dir / "inference.json").write_text(
                 json.dumps(task_infer, indent=2)
             )
-        except Exception as _e:
+        except OSError as _e:
             print(f"[task-tracking] WARN: Could not write task_{idx} folder: {_e}",
                   file=sys.stderr)
 
@@ -1146,7 +1149,7 @@ def main() -> None:
                 _ape     = _pt.get("avg_prompt_eval_tok_s", 0)
                 _agen    = _pt.get("avg_gen_tok_s",         0)
                 _attft   = _pt.get("avg_ttft_ms",           0)
-                _intent  = (_pt.get("intent", "") or "")[:40]
+                _intent  = (_pt.get("intent", "") or "")[:_INTENT_DISPLAY_MAX_LEN]
                 _ttft_s  = f"{_attft/1000:.1f}s" if isinstance(_attft, (int, float)) and _attft > 0 else "N/A"
                 _pe_str  = f"{_ape}t/s"  if isinstance(_ape,  (int, float)) and _ape  > 0 else "N/A"
                 _gen_str = f"{_agen}t/s" if isinstance(_agen, (int, float)) and _agen > 0 else "N/A"
