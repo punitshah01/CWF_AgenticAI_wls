@@ -43,7 +43,7 @@ from typing import Dict, List, Optional
 
 # CPU-only inference of large models (e.g. llama3.1:70b on 576 cores) can easily
 # take 30+ minutes per request; 2 hours gives ample headroom without hanging forever.
-_INFERENCE_TIMEOUT_S = 7200
+INFERENCE_TIMEOUT_S = 7200
 
 
 class OllamaMetricsProxy:
@@ -134,7 +134,7 @@ class OllamaMetricsProxy:
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
-                    with urllib.request.urlopen(req_obj, timeout=_INFERENCE_TIMEOUT_S) as r:
+                    with urllib.request.urlopen(req_obj, timeout=INFERENCE_TIMEOUT_S) as r:
                         resp_body = r.read()
                     wall_time_s = time.time() - t0
                     native_resp = json.loads(resp_body)
@@ -148,7 +148,7 @@ class OllamaMetricsProxy:
                 eval_count        = int(native_resp.get("eval_count",        0) or 0)
                 eval_dur_ns       = int(native_resp.get("eval_duration",      0) or 0)
                 prompt_eval_count = int(native_resp.get("prompt_eval_count",  0) or 0)
-                prompt_eval_dur_ns= int(native_resp.get("prompt_eval_duration",0) or 0)
+                prompt_eval_dur_ns = int(native_resp.get("prompt_eval_duration", 0) or 0)
                 total_dur_ns      = int(native_resp.get("total_duration",     0) or 0)
                 load_dur_ns       = int(native_resp.get("load_duration",      0) or 0)
 
@@ -214,7 +214,7 @@ class OllamaMetricsProxy:
                     )
                     if body:
                         req_obj.add_header("Content-Length", str(len(body)))
-                    with urllib.request.urlopen(req_obj, timeout=_INFERENCE_TIMEOUT_S) as r:
+                    with urllib.request.urlopen(req_obj, timeout=INFERENCE_TIMEOUT_S) as r:
                         resp_body = r.read()
                         status = r.status
                     self._send_json(status, resp_body)

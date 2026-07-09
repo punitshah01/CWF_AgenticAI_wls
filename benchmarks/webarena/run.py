@@ -861,11 +861,12 @@ def main() -> None:
         dram_w = tm.dram_power_w
         total_infer_s = infer_metrics.get("total_inference_time_s", 0) or 0
 
-        # Energy per token: (pkg_power_W * total_inference_s) / total_tokens
+        # Energy per token (J/token) = package_power_W * inference_time_s / total_tokens.
         # Note: pkg_w is mean power over the entire run (RAPL), so this is a
         # conservative upper bound — actual inference-only energy will be lower.
+        # total_infer_s is guaranteed numeric (0.0 when proxy is unavailable).
         energy_per_tok = "N/A"
-        if isinstance(total_infer_s, (int, float)) and total_infer_s > 0 and total_tokens > 0 and pkg_w > 0:
+        if total_infer_s > 0 and total_tokens > 0 and pkg_w > 0:
             energy_per_tok = f"{(pkg_w * total_infer_s) / total_tokens:.2f}"
 
         print(f"\n{'='*70}")
@@ -896,8 +897,9 @@ def main() -> None:
             print("\n  Inference Metrics:")
             print(f"    Prompt Eval    : {avg_pe} tok/s (avg across {num_req} requests)")
             print(f"    Generation     : {avg_gen} tok/s (avg)")
-            if isinstance(avg_tt, float):
-                # avg_ttft_ms is stored in milliseconds; display in seconds for readability
+            if isinstance(avg_tt, (int, float)):
+                # avg_ttft_ms is stored in milliseconds; display in seconds for readability.
+                # isinstance guard needed because _avg() returns "N/A" (str) when no requests were recorded.
                 print(f"    TTFT           : {avg_tt/1000:.2f}s (avg)")
             else:
                 print(f"    TTFT           : {avg_tt}")

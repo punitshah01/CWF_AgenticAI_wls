@@ -160,9 +160,9 @@ def get_ollama_metadata(port: int = 11434) -> OrderedDict:
                 if "OLLAMA_NUM_THREADS" in line:
                     # e.g.  Environment="OLLAMA_NUM_THREADS=570"
                     # Extract the value after the last '=' and strip surrounding quotes
-                    m = _re.search(r'OLLAMA_NUM_THREADS=([^"\s]+)', line)
+                    m = _re.search(r'OLLAMA_NUM_THREADS=(\d+)', line)
                     if m:
-                        meta["ollama_num_threads"] = m.group(1).strip()
+                        meta["ollama_num_threads"] = m.group(1)
                     break
     except Exception:
         pass
