@@ -344,7 +344,16 @@ class EmonCollector:
             _sys_python = "python3"  # fallback
 
         # Verify deps with system python; auto-install if missing (pnpwls: PIP_BREAK_SYSTEM_PACKAGES=1)
-        _required = ["pandas", "numpy", "pytz", "defusedxml", "openpyxl", "xlsxwriter"]
+        # Full list of mpp.py dependencies (SEP 5.49+):
+        #   polars       — DataFrame engine used by csv.py writer
+        #   multiprocess — parallel processing in mpp.py
+        #   natsort      — natural sort for metric names
+        #   tqdm         — progress bars
+        #   tables       — HDF5/PyTables support
+        _required = [
+            "pandas", "numpy", "pytz", "defusedxml", "openpyxl", "xlsxwriter",
+            "polars", "multiprocess", "natsort", "tqdm", "tables",
+        ]
         _missing = []
         for _mod in _required:
             _r = subprocess.run([_sys_python, "-c", f"import {_mod}"], capture_output=True, text=True)
@@ -359,7 +368,8 @@ class EmonCollector:
             _inst = None
             # Build proxy candidates: env var first (user may have set it), then known Intel
             # lab proxies in priority order, then direct (None = no --proxy flag).
-            _env_proxy = (os.environ.get("https_proxy") or os.environ.get("http_proxy") or "").strip()
+            _env_proxy = (os.environ.get("https_proxy") or os.environ.get("http_proxy") or
+                          os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or "").strip()
             _proxies = []
             if _env_proxy:
                 _proxies.append(_env_proxy)
@@ -375,6 +385,8 @@ class EmonCollector:
                 _inst = subprocess.run(_cmd, capture_output=True, text=True, env=_env)
                 if _inst.returncode == 0:
                     _success = True
+                    print(f"[emon] Successfully installed: {' '.join(_missing)}"
+                          + (f" (via {_proxy})" if _proxy else ""))
                     break
             if not _success:
                 _stderr = _inst.stderr[-300:] if _inst else ""
@@ -466,7 +478,7 @@ class EmonCollector:
             print(f"[emon] Archive skipped: {e}")
 
 
-# ── CSV readers ───────────────────────────────────────────────────────────────
+# ── CSV readers ──────────────────────────────────────────────────────────
 
 def _read_emon_csv(csv_file: Path) -> Tuple[str, str]:
     """
