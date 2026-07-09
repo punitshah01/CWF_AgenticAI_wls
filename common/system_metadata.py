@@ -15,6 +15,9 @@ Usage:
 """
 
 import subprocess
+import urllib.error
+import urllib.request
+import json as _json
 from collections import OrderedDict
 
 from .cpu_info import CPUInfo
@@ -101,4 +104,70 @@ def get_system_metadata(cpu: CPUInfo, os_info: OSInfo,
     return meta
 
 
-__all__ = ["get_system_metadata"]
+def get_ollama_metadata(port: int = 11434) -> OrderedDict:
+    """Query Ollama for version, loaded model, and thread configuration.
+
+    Gracefully returns "N/A" for each field if Ollama is unreachable or
+    returns unexpected data — this is intentional so callers using an
+    external/cloud LLM server don't crash.
+
+    Args:
+        port: Ollama API port (default 11434).
+
+    Returns:
+        OrderedDict with keys:
+            ollama_version, ollama_model_name, ollama_model_size_gb,
+            ollama_quantization, ollama_num_threads
+    """
+    meta: OrderedDict = OrderedDict()
+    base = f"http://localhost:{port}"
+
+    # ── Version ───────────────────────────────────────────────────────────────
+    try:
+        with urllib.request.urlopen(f"{base}/api/version", timeout=5) as r:
+            data = _json.loads(r.read())
+        meta["ollama_version"] = data.get("version", "N/A")
+    except Exception:
+        meta["ollama_version"] = "N/A"
+
+    # ── Loaded model (from /api/ps) ───────────────────────────────────────────
+    meta["ollama_model_name"]     = "N/A"
+    meta["ollama_model_size_gb"]  = "N/A"
+    meta["ollama_quantization"]   = "N/A"
+    try:
+        with urllib.request.urlopen(f"{base}/api/ps", timeout=5) as r:
+            data = _json.loads(r.read())
+        models = data.get("models") or []
+        if models:
+            m0 = models[0]
+            meta["ollama_model_name"] = m0.get("name", "N/A")
+            size_bytes = m0.get("size", 0) or 0
+            meta["ollama_model_size_gb"] = (
+                f"{size_bytes / 1e9:.1f}" if size_bytes > 0 else "N/A"
+            )
+            details = m0.get("details") or {}
+            meta["ollama_quantization"] = details.get("quantization_level", "N/A")
+    except Exception:
+        pass
+
+    # ── Thread config from systemd override ──────────────────────────────────
+    meta["ollama_num_threads"] = "N/A"
+    try:
+        import re as _re
+        override = "/etc/systemd/system/ollama.service.d/override.conf"
+        with open(override) as f:
+            for line in f:
+                if "OLLAMA_NUM_THREADS" in line:
+                    # e.g.  Environment="OLLAMA_NUM_THREADS=570"
+                    # Extract the value after the last '=' and strip surrounding quotes
+                    m = _re.search(r'OLLAMA_NUM_THREADS=([^"\s]+)', line)
+                    if m:
+                        meta["ollama_num_threads"] = m.group(1).strip()
+                    break
+    except Exception:
+        pass
+
+    return meta
+
+
+__all__ = ["get_system_metadata", "get_ollama_metadata"]

@@ -43,6 +43,7 @@ import urllib.error
 import urllib.request
 import warnings
 from pathlib import Path
+from typing import Optional
 
 # Suppress beartype PEP 585 deprecation warnings from third-party dependencies
 # (gymnasium uses typing.Mapping[...] instead of collections.abc.Mapping[...]).
@@ -87,12 +88,13 @@ sys.path.insert(0, str(REPO_ROOT))
 from common.cpu_info import CPUInfo
 from common.os_info import OSInfo
 from common.platform_info import detect_platform
-from common.system_metadata import get_system_metadata
+from common.system_metadata import get_system_metadata, get_ollama_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
 from common.telemetry.emon import EmonCollector
 from common.cli_utils import setup_tee_logging, teardown_logging
+from benchmarks.webarena.lib.ollama_metrics import OllamaMetricsProxy
 
 BENCHMARK = "webarena"
 BENCHMARK_DIR = Path(__file__).resolve().parent
@@ -551,7 +553,8 @@ def _run_with_per_task_emon(
     return proc.returncode
 
 
-def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
+def run_evaluation(args: argparse.Namespace, run_id: str,
+                   proxy_port: Optional[int] = None) -> dict:
     """Invoke WebArena run.py. Returns result dict."""
     # Always apply patches to the WebArena clone before running — idempotent.
     _ensure_webarena_patched()
@@ -559,7 +562,11 @@ def run_evaluation(args: argparse.Namespace, run_id: str) -> dict:
     results_dir = WORKDIR / "results" / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    base_url = f"http://localhost:{args.llm_port}/v1"
+    base_url = (
+        f"http://localhost:{proxy_port}/v1"
+        if proxy_port is not None
+        else f"http://localhost:{args.llm_port}/v1"
+    )
 
     # Resolve and validate model name before touching any env vars
     model_name = _resolve_model_name(args)
@@ -733,6 +740,25 @@ def main() -> None:
     if not args.dry_run:
         setup_tee_logging(out_dir / "console_output.log")
 
+    # ── Inference metrics proxy ───────────────────────────────────────────────
+    # Start OllamaMetricsProxy on llm_port+1 so WebArena's LLM calls are
+    # intercepted and translated to Ollama's native /api/chat endpoint,
+    # which includes full per-request timing (eval_count, eval_duration, etc.).
+    proxy_port: Optional[int] = None
+    _proxy: Optional[OllamaMetricsProxy] = None
+    if not args.dry_run:
+        _candidate_port = args.llm_port + 1
+        _proxy = OllamaMetricsProxy(
+            ollama_port=args.llm_port,
+            proxy_port=_candidate_port,
+        )
+        if _proxy.start():
+            proxy_port = _candidate_port
+            print(f"[ollama-proxy] Metrics proxy started on port {proxy_port} "
+                  f"(forwarding → localhost:{args.llm_port})")
+        else:
+            _proxy = None
+
     try:
         cpu = CPUInfo()
         os_info = OSInfo()
@@ -752,6 +778,22 @@ def main() -> None:
 
         sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
                                        experiment_name=BENCHMARK)
+
+        # ── Collect and write system_metadata.json ────────────────────────────
+        ollama_meta = get_ollama_metadata(port=args.llm_port)
+        full_meta = dict(sys_meta)
+        full_meta.update(ollama_meta)
+        full_meta["inference_cores"] = str(args.inference_cores)
+        full_meta["env_cores"]       = str(args.env_cores)
+        full_meta["llm_model"]       = model_label
+        full_meta["llm_port"]        = str(args.llm_port)
+        try:
+            (out_dir / "system_metadata.json").write_text(
+                json.dumps(full_meta, indent=2)
+            )
+        except Exception as _e:
+            print(f"[WARN] Could not write system_metadata.json: {_e}", file=sys.stderr)
+
         # --emon manages its own per-task EmonCollector instances; global EMON disabled in TM.
         tm = TelemetryManager(
             output_dir=str(out_dir / "telemetry"),
@@ -765,18 +807,45 @@ def main() -> None:
         if not args.dry_run:
             tm.start(session_name=run_id)
 
-        bench_results = run_evaluation(args, run_id)
+        bench_results = run_evaluation(args, run_id, proxy_port=proxy_port)
 
         if not args.dry_run:
             print("\n[telemetry] Stopping collectors and processing EMON...")
             tm.stop(process_emon=False, sockets=cpu.get_sockets())
             print("[telemetry] Collection complete.")
 
+        # ── Collect inference metrics from proxy ──────────────────────────────
+        infer_metrics: dict = {}
+        if _proxy is not None:
+            infer_metrics = _proxy.get_aggregate_metrics()
+            per_req = _proxy.get_per_request_metrics()
+            # Write per-request detail to inference_metrics.json
+            try:
+                (out_dir / "inference_metrics.json").write_text(
+                    json.dumps({"aggregate": infer_metrics, "per_request": per_req}, indent=2)
+                )
+            except Exception as _e:
+                print(f"[WARN] Could not write inference_metrics.json: {_e}", file=sys.stderr)
+
         common_data: OrderedDict = OrderedDict()
         common_data.update(bench_results)
         common_data.update(sys_meta)
         common_data["pkg_power_w"]  = str(tm.pkg_power_w)
         common_data["dram_power_w"] = str(tm.dram_power_w)
+        # Inference metrics (N/A strings when proxy was not used)
+        common_data["avg_prompt_eval_tok_s"]   = str(infer_metrics.get("avg_prompt_eval_tok_s",   "N/A"))
+        common_data["avg_generation_tok_s"]    = str(infer_metrics.get("avg_generation_tok_s",    "N/A"))
+        common_data["avg_ttft_ms"]             = str(infer_metrics.get("avg_ttft_ms",             "N/A"))
+        common_data["total_prompt_tokens"]     = str(infer_metrics.get("total_prompt_tokens",     0))
+        common_data["total_completion_tokens"] = str(infer_metrics.get("total_completion_tokens", 0))
+        common_data["total_inference_time_s"]  = str(infer_metrics.get("total_inference_time_s",  0.0))
+        common_data["num_llm_requests"]        = str(infer_metrics.get("num_llm_requests",        0))
+        # Ollama metadata
+        common_data["ollama_version"]          = ollama_meta.get("ollama_version",      "N/A")
+        common_data["ollama_model_name"]       = ollama_meta.get("ollama_model_name",   "N/A")
+        common_data["ollama_model_size_gb"]    = ollama_meta.get("ollama_model_size_gb","N/A")
+        common_data["ollama_quantization"]     = ollama_meta.get("ollama_quantization", "N/A")
+        common_data["ollama_num_threads"]      = ollama_meta.get("ollama_num_threads",  "N/A")
 
         write_csv_row(out_dir / "results.csv",
                       list(common_data.keys()), list(common_data.values()))
@@ -784,17 +853,61 @@ def main() -> None:
         rw.add_row(common_data=common_data, rapl_data=tm.rapl_mean)
         rw.save()
 
-        # Final Summary
+        # ── Final Summary ─────────────────────────────────────────────────────
+        total_tokens = (infer_metrics.get("total_prompt_tokens", 0)
+                        + infer_metrics.get("total_completion_tokens", 0))
+        total_runtime_s = float(bench_results.get("total_runtime_s") or 0)
+        pkg_w = tm.pkg_power_w
+        dram_w = tm.dram_power_w
+        total_infer_s = infer_metrics.get("total_inference_time_s", 0) or 0
+
+        # Energy per token: (pkg_power_W * total_inference_s) / total_tokens
+        # Note: pkg_w is mean power over the entire run (RAPL), so this is a
+        # conservative upper bound — actual inference-only energy will be lower.
+        energy_per_tok = "N/A"
+        if isinstance(total_infer_s, (int, float)) and total_infer_s > 0 and total_tokens > 0 and pkg_w > 0:
+            energy_per_tok = f"{(pkg_w * total_infer_s) / total_tokens:.2f}"
+
         print(f"\n{'='*70}")
         print("  WebArena Run Summary")
         print(f"{'='*70}")
         print(f"  Run ID           : {run_id}")
+        print(f"  Platform         : {platform}")
+        total_cores = sys_meta.get("total_cores", "N/A")
+        numa_nodes  = sys_meta.get("numa_nodes",  "N/A")
+        print(f"  CPU              : {sys_meta.get('cpu_model', 'N/A')} "
+              f"{total_cores} cores / {numa_nodes} NUMA nodes")
+        mem_gb = sys_meta.get("memory_total_gb", "N/A")
+        print(f"  RAM              : {mem_gb} GB")
+        quant    = ollama_meta.get("ollama_quantization", "N/A")
+        size_gb  = ollama_meta.get("ollama_model_size_gb","N/A")
+        print(f"  Model            : {model_label} ({quant}, {size_gb}GB)")
+        print()
         print(f"  Tasks Completed  : {bench_results.get('tasks_completed', 'N/A')}/{bench_results.get('n_tasks', 'N/A')}")
         print(f"  Success Rate     : {bench_results.get('success_rate', 'N/A')}%")
         print(f"  Total Runtime    : {bench_results.get('total_runtime_s', 'N/A')}s")
+        if infer_metrics:
+            avg_pe  = infer_metrics.get("avg_prompt_eval_tok_s", "N/A")
+            avg_gen = infer_metrics.get("avg_generation_tok_s",  "N/A")
+            avg_tt  = infer_metrics.get("avg_ttft_ms",           "N/A")
+            pt      = infer_metrics.get("total_prompt_tokens",     0)
+            ct      = infer_metrics.get("total_completion_tokens", 0)
+            num_req = infer_metrics.get("num_llm_requests",        0)
+            print("\n  Inference Metrics:")
+            print(f"    Prompt Eval    : {avg_pe} tok/s (avg across {num_req} requests)")
+            print(f"    Generation     : {avg_gen} tok/s (avg)")
+            if isinstance(avg_tt, float):
+                # avg_ttft_ms is stored in milliseconds; display in seconds for readability
+                print(f"    TTFT           : {avg_tt/1000:.2f}s (avg)")
+            else:
+                print(f"    TTFT           : {avg_tt}")
+            print(f"    Total Tokens   : {total_tokens:,} (prompt: {pt:,} + completion: {ct:,})")
+            print(f"    Inference Time : {total_infer_s}s (of {total_runtime_s:.1f}s total)")
         print("\n  Power Metrics (RAPL):")
-        print(f"    Package Power  : {tm.pkg_power_w:.1f}W (mean)")
-        print(f"    DRAM Power     : {tm.dram_power_w:.1f}W (mean)")
+        print(f"    Package Power  : {pkg_w:.1f}W (mean)")
+        print(f"    DRAM Power     : {dram_w:.1f}W (mean)")
+        if energy_per_tok != "N/A":
+            print(f"    Energy/Token   : {energy_per_tok} J/token")
         if args.emon:
             task_dirs = sorted((out_dir / "telemetry").glob("task_*")) if (out_dir / "telemetry").exists() else []
             print(f"\n  Per-task EMON    : {len(task_dirs)} task(s) collected")
@@ -815,6 +928,8 @@ def main() -> None:
         traceback.print_exc()
         sys.exit(1)
     finally:
+        if _proxy is not None:
+            _proxy.stop()
         teardown_logging()
 
 
