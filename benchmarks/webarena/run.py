@@ -958,8 +958,8 @@ def main() -> None:
             _emon_out = str(tm.emon_output_dir) if tm.emon_output_dir else "N/A"
             print("\n  EMON Telemetry:")
             print(f"    Status         : {_emon_status}")
-            print(f"    Collection     : 300s steady-state (after 180s warmup)")
-            print(f"    Samples        : ~40 (7.5s per sample on CWF)")
+            print("    Collection     : 300s steady-state (after 180s warmup)")
+            print("    Samples        : ~40 (7.5s per sample on CWF)")
             print(f"    Output         : {_emon_out}")
             if tm.emon_ready and tm.emon_output_dir:
                 _xlsx = list(Path(tm.emon_output_dir).glob("*socket_view*summary*.xlsx"))
