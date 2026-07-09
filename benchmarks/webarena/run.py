@@ -773,7 +773,7 @@ def main() -> None:
         print(f"  Tasks     : {args.start_idx}..{args.end_idx}")
         print(f"  Output    : {out_dir}")
         if args.emon:
-            print(f"  EMON      : per-task mode (start +2s after [Intent], stop at [Result])")
+            print("  EMON      : per-task mode (start +2s after [Intent], stop at [Result])")
         print(f"{'='*60}\n")
 
         sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
