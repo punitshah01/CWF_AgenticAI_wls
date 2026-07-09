@@ -62,6 +62,7 @@ class OllamaMetricsProxy:
         self.proxy_port = proxy_port
         self._metrics: List[Dict] = []
         self._lock = threading.Lock()
+        self._current_task_idx: Optional[int] = None
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
@@ -250,6 +251,33 @@ class OllamaMetricsProxy:
             self._server.shutdown()
             self._server = None
 
+    def set_current_task(self, task_idx: int) -> None:
+        """Tag subsequent inference requests with task_idx."""
+        with self._lock:
+            self._current_task_idx = task_idx
+
+    def clear_current_task(self) -> None:
+        """Clear the current task tag (called between tasks)."""
+        with self._lock:
+            self._current_task_idx = None
+
+    def get_per_task_metrics(self) -> Dict[int, List[Dict]]:
+        """Return per-request metrics grouped by task_idx.
+
+        Requests recorded outside a task boundary (task_idx is None) are
+        stored under key -1.
+        """
+        with self._lock:
+            records = list(self._metrics)
+
+        grouped: Dict[int, List[Dict]] = {}
+        for r in records:
+            idx = r.get("task_idx")
+            if idx is None:
+                idx = -1
+            grouped.setdefault(idx, []).append(r)
+        return grouped
+
     def get_aggregate_metrics(self) -> Dict:
         """Return aggregate inference metrics across all recorded requests.
 
@@ -303,4 +331,5 @@ class OllamaMetricsProxy:
 
     def _record(self, m: Dict) -> None:
         with self._lock:
+            m["task_idx"] = self._current_task_idx
             self._metrics.append(m)
