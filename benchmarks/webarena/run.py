@@ -42,6 +42,7 @@ EMON modes (independent, can be combined):
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -50,7 +51,7 @@ import urllib.error
 import urllib.request
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Dict, List, Optional
 
 # Suppress beartype PEP 585 deprecation warnings from third-party dependencies
 # (gymnasium uses typing.Mapping[...] instead of collections.abc.Mapping[...]).
@@ -106,6 +107,9 @@ from benchmarks.webarena.lib.ollama_metrics import OllamaMetricsProxy
 BENCHMARK = "webarena"
 BENCHMARK_DIR = Path(__file__).resolve().parent
 _SETUP_MARKER = BENCHMARK_DIR / ".setup_complete"
+
+# Maximum characters of intent text displayed in the per-task summary table.
+_INTENT_DISPLAY_MAX_LEN = 40
 
 # ── Global state for signal-handler cleanup (mirrors pnpwls pattern) ─────────
 _TELEMETRY_MANAGER = None
@@ -486,6 +490,155 @@ def build_run_id(args: argparse.Namespace) -> str:
     return f"webarena_{model_key}_{args.inference_cores}c_{n}tasks_{ts}"
 
 
+def _run_with_task_tracking(
+    cmd: list,
+    cwd: str,
+    env: dict,
+    out_dir: Path,
+    proxy: Optional["OllamaMetricsProxy"] = None,
+    on_config: Optional[Callable[[int], None]] = None,
+    on_intent: Optional[Callable[[int], None]] = None,
+    on_result: Optional[Callable[[int, str], None]] = None,
+) -> tuple:
+    """Run the WebArena evaluation subprocess with per-task tracking.
+
+    Parses stdout for:
+        [Config file]: /tmp/.../N.json   → task N starting
+        [Intent]: <text>                 → capture task intent
+        [Result] (PASS) /tmp/.../N.json  → task N passed
+        [Result] (FAIL) /tmp/.../N.json  → task N failed
+        [Unhandled Error] ...            → task N errored
+
+    After each task completes, writes:
+        <out_dir>/tasks/task_<N>/result.json    — per-task summary
+        <out_dir>/tasks/task_<N>/inference.json — per-request inference records
+
+    Optional callbacks (called when each event is detected):
+        on_config(idx)           — when [Config file] for task idx is seen
+        on_intent(idx)           — when [Intent]: is seen for current task
+        on_result(idx, result)   — when task finishes; result is PASS/FAIL/ERROR
+
+    Returns (per_task_results, exit_code).
+    per_task_results: list of dicts with task_idx, intent, result,
+    runtime_s, num_requests, prompt_tokens, completion_tokens,
+    avg_prompt_eval_tok_s, avg_gen_tok_s, avg_ttft_ms.
+    """
+    per_task_results: List[Dict] = []
+    _cur: Dict = {}  # in-flight task state
+
+    def _agg_infer(records: List[Dict]) -> Dict:
+        """Compute aggregate inference metrics from per-request records."""
+        num_req  = len(records)
+        pt       = sum(r.get("prompt_tokens",    0) for r in records)
+        ct       = sum(r.get("completion_tokens", 0) for r in records)
+        pr_rates = [r["prompt_eval_rate_tok_s"] for r in records
+                    if r.get("prompt_eval_rate_tok_s", 0) > 0]
+        gr_rates = [r["generation_rate_tok_s"]  for r in records
+                    if r.get("generation_rate_tok_s",  0) > 0]
+        ttfts    = [r["time_to_first_token_ms"] for r in records
+                    if r.get("time_to_first_token_ms", 0) > 0]
+        avg_pe   = round(sum(pr_rates) / len(pr_rates), 1) if pr_rates else 0.0
+        avg_gen  = round(sum(gr_rates) / len(gr_rates), 1) if gr_rates else 0.0
+        avg_ttft = round(sum(ttfts)    / len(ttfts),    1) if ttfts    else 0.0
+        return {
+            "num_requests":          num_req,
+            "prompt_tokens":         pt,
+            "completion_tokens":     ct,
+            "avg_prompt_eval_tok_s": avg_pe,
+            "avg_gen_tok_s":         avg_gen,
+            "avg_ttft_ms":           avg_ttft,
+        }
+
+    def _finish_task(result: str) -> None:
+        """Finalise the in-flight task: record result and write output folder."""
+        if not _cur:
+            return
+        idx       = _cur["task_idx"]
+        end_time  = time.time()
+        runtime_s = round(end_time - _cur["start_time"], 1)
+
+        if on_result is not None:
+            on_result(idx, result)
+
+        if proxy is not None:
+            proxy.clear_current_task()
+
+        task_infer: List[Dict] = []
+        if proxy is not None:
+            task_infer = proxy.get_per_task_metrics().get(idx, [])
+
+        agg = _agg_infer(task_infer)
+        task_record: Dict = {
+            "task_idx": idx,
+            "intent":   _cur.get("intent", ""),
+            "result":   result,
+            "runtime_s": runtime_s,
+            **agg,
+        }
+        per_task_results.append(task_record)
+
+        # Write per-task output folder
+        task_dir = out_dir / "tasks" / f"task_{idx}"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            (task_dir / "result.json").write_text(
+                json.dumps(task_record, indent=2)
+            )
+            (task_dir / "inference.json").write_text(
+                json.dumps(task_infer, indent=2)
+            )
+        except OSError as _e:
+            print(f"[task-tracking] WARN: Could not write task_{idx} folder: {_e}",
+                  file=sys.stderr)
+
+        _cur.clear()
+
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1,
+    )
+
+    try:
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+
+            # [Config file]: /tmp/.../N.json — new task starting
+            m = re.search(r'\[Config file\].*?[/\\](\d+)\.json', line)
+            if m:
+                if _cur:
+                    _finish_task("ERROR")
+                idx = int(m.group(1))
+                _cur["task_idx"]   = idx
+                _cur["start_time"] = time.time()
+                _cur["intent"]     = ""
+                if proxy is not None:
+                    proxy.set_current_task(idx)
+                if on_config is not None:
+                    on_config(idx)
+
+            # [Intent]: <text>
+            if "[Intent]:" in line and _cur:
+                _cur["intent"] = line.split("[Intent]:", 1)[-1].strip()
+                if on_intent is not None:
+                    on_intent(_cur["task_idx"])
+
+            # [Result] (PASS) / [Result] (FAIL)
+            if "[Result]" in line and _cur:
+                _finish_task("PASS" if "(PASS)" in line else "FAIL")
+            # [Unhandled Error]
+            elif "[Unhandled Error]" in line and _cur:
+                _finish_task("ERROR")
+
+    finally:
+        if _cur:
+            _finish_task("ERROR")
+
+    proc.wait()
+    return per_task_results, proc.returncode
+
+
 def _run_with_per_task_emon(
     cmd: list,
     cwd: str,
@@ -493,28 +646,22 @@ def _run_with_per_task_emon(
     out_dir: Path,
     sep_dir: str = "/opt/intel/sep",
     start_delay_s: float = 2.0,
-) -> int:
-    """Run the WebArena evaluation subprocess and collect a separate EMON file
-    per task.
+    proxy: Optional["OllamaMetricsProxy"] = None,
+) -> tuple:
+    """Run WebArena with per-task EMON collection and task tracking.
 
-    Watches the streamed output for the three key log patterns emitted by
-    WebArena's run.py:
-
-        [Config file]: /tmp/.../N.json          → task index N (task is starting)
-        [Intent]: ...                            → 2 s later: start emon -collect-edp
-        [Result] ...  OR  [Unhandled Error] ...  → stop emon -stop immediately
+    Wraps _run_with_task_tracking() with EMON start/stop callbacks so that
+    a separate EMON file is collected per task (no duplicated stdout parsing).
 
     Each task's raw EMON data is saved to:
         <out_dir>/telemetry/task_<N>/emon_task_<N>.txt
 
-    Returns the subprocess exit code.
+    Returns (per_task_results, exit_code).
     """
-    import re
     import threading
 
     _current_emon: list = [None]   # EmonCollector in flight
     _pending_timer: list = [None]  # threading.Timer for delayed start (cancelable)
-    _task_idx: list = [None]
     _edp_threads: list = []        # background EDP post-processing threads
 
     TARGET_SAMPLES = 600  # process up to 600 samples from the center of each task's collection;
@@ -535,8 +682,6 @@ def _run_with_per_task_emon(
         ec.stop_collection()
 
         # Fire EDP post-processing in a daemon thread so the next task is not blocked.
-        # Uses target_samples=TARGET_SAMPLES: always processes exactly 180 samples
-        # (or all samples if fewer than 180 were collected), centered in the collection.
         def _edp():
             print(f"[per-task-emon] Post-processing {ec.output_file} (target={TARGET_SAMPLES} samples)…")
             result = ec.process_emon_with_edp(target_samples=TARGET_SAMPLES)
@@ -558,61 +703,45 @@ def _run_with_per_task_emon(
         else:
             print(f"[per-task-emon] WARNING: EMON start failed for task {idx}")
 
-    proc = subprocess.Popen(
-        cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1,
-    )
-
-    try:
-        for line in proc.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-
-            # ── [Config file]: /tmp/.../N.json ──────────────────────────────
-            # Marks the very start of a new task. Cancel any pending start timer
-            # and stop any in-progress EMON from the previous task (+ trigger EDP).
-            m = re.search(r'\[Config file\].*?[/\\](\d+)\.json', line)
-            if m:
-                _cancel_timer()
-                _stop_and_process_emon()
-                _task_idx[0] = int(m.group(1))
-
-            # ── [Intent]: ... ───────────────────────────────────────────────
-            # Task has been parsed and the agent is about to act. Schedule EMON
-            # start after start_delay_s to skip the model's first cold token.
-            if "[Intent]:" in line and _task_idx[0] is not None:
-                idx = _task_idx[0]
-                task_dir = out_dir / "telemetry" / f"task_{idx}"
-                print(f"[per-task-emon] Task {idx}: EMON starts in {start_delay_s:.0f}s → {task_dir / f'emon_task_{idx}.txt'}")
-                t = threading.Timer(start_delay_s, _start_emon, args=(idx, task_dir))
-                t.daemon = True
-                _pending_timer[0] = t
-                t.start()
-
-            # ── [Result] / [Unhandled Error] ────────────────────────────────
-            # Task finished (pass or fail). Stop EMON and start EDP post-processing.
-            if "[Result]" in line or "[Unhandled Error]" in line:
-                _cancel_timer()
-                _stop_and_process_emon()
-
-    finally:
-        # Ensure cleanup if the subprocess exits unexpectedly.
+    # ── EMON event callbacks ──────────────────────────────────────────────────
+    def _on_config(idx: int) -> None:
         _cancel_timer()
         _stop_and_process_emon()
-        # Wait for all background EDP post-processing threads before returning.
-        pending = [t for t in _edp_threads if t.is_alive()]
-        if pending:
-            print(f"[per-task-emon] Waiting for {len(pending)} EDP post-processing job(s) to finish…")
-            for t in pending:
-                t.join()
 
-    proc.wait()
-    return proc.returncode
+    def _on_intent(idx: int) -> None:
+        task_dir = out_dir / "telemetry" / f"task_{idx}"
+        print(f"[per-task-emon] Task {idx}: EMON starts in {start_delay_s:.0f}s → "
+              f"{task_dir / f'emon_task_{idx}.txt'}")
+        t = threading.Timer(start_delay_s, _start_emon, args=(idx, task_dir))
+        t.daemon = True
+        _pending_timer[0] = t
+        t.start()
+
+    def _on_result(idx: int, result: str) -> None:
+        _cancel_timer()
+        _stop_and_process_emon()
+
+    per_task_results, rc = _run_with_task_tracking(
+        cmd=cmd, cwd=cwd, env=env, out_dir=out_dir,
+        proxy=proxy,
+        on_config=_on_config,
+        on_intent=_on_intent,
+        on_result=_on_result,
+    )
+
+    # Wait for all background EDP post-processing threads before returning.
+    pending = [t for t in _edp_threads if t.is_alive()]
+    if pending:
+        print(f"[per-task-emon] Waiting for {len(pending)} EDP post-processing job(s) to finish…")
+        for t in pending:
+            t.join()
+
+    return per_task_results, rc
 
 
 def run_evaluation(args: argparse.Namespace, run_id: str,
-                   proxy_port: Optional[int] = None) -> dict:
+                   proxy_port: Optional[int] = None,
+                   proxy: Optional["OllamaMetricsProxy"] = None) -> dict:
     """Invoke WebArena run.py. Returns result dict."""
     # Always apply patches to the WebArena clone before running — idempotent.
     _ensure_webarena_patched()
@@ -748,33 +877,46 @@ def run_evaluation(args: argparse.Namespace, run_id: str,
         cmd = eval_cmd
 
     run_rc: int
+    per_task_results: List[Dict] = []
+    # Use the repo output dir for per-task artifacts (tasks/task_N/)
+    repo_out_dir = REPO_ROOT / "results" / BENCHMARK / run_id
     if args.emon:
-        run_rc = _run_with_per_task_emon(
+        per_task_results, run_rc = _run_with_per_task_emon(
             cmd=cmd,
             cwd=str(WORKDIR),
             env=env,
-            out_dir=results_dir.parent,  # results/{run_id}/
+            out_dir=repo_out_dir,
             sep_dir="/opt/intel/sep",
+            proxy=proxy,
         )
     else:
-        run_rc = subprocess.run(cmd, cwd=str(WORKDIR), env=env).returncode
+        per_task_results, run_rc = _run_with_task_tracking(
+            cmd=cmd,
+            cwd=str(WORKDIR),
+            env=env,
+            out_dir=repo_out_dir,
+            proxy=proxy,
+        )
     if run_rc != 0:
         print(f"[ERROR] WebArena evaluation command failed with exit code {run_rc}", file=sys.stderr)
     results["total_runtime_s"] = str(round(time.time() - t0, 1))
 
-    # Parse result JSON if available
-    import json
+    # Fix tasks_completed: count PASS results from our own per-task tracking
+    # instead of relying on WebArena's result JSON (which often reports 0).
+    n_pass = sum(1 for t in per_task_results if t.get("result") == "PASS")
+    results["tasks_completed"] = str(n_pass)
+
+    # Parse result JSON for success_rate (WebArena's own metric, still useful)
     for jf in sorted(results_dir.glob("*.json")):
         try:
             data = json.loads(jf.read_text())
             if "success_rate" in data:
                 results["success_rate"] = str(data["success_rate"])
-            if "num_success" in data:
-                results["tasks_completed"] = str(data["num_success"])
             break
         except Exception:
             continue
 
+    results["per_task_results"] = per_task_results
     return results
 
 
@@ -884,7 +1026,7 @@ def main() -> None:
         if not args.dry_run:
             tm.start(session_name=run_id)
 
-        bench_results = run_evaluation(args, run_id, proxy_port=proxy_port)
+        bench_results = run_evaluation(args, run_id, proxy_port=proxy_port, proxy=_proxy)
 
         if not args.dry_run:
             print("\n[telemetry] Stopping collectors and processing EMON...")
@@ -906,6 +1048,8 @@ def main() -> None:
 
         common_data: OrderedDict = OrderedDict()
         common_data.update(bench_results)
+        # per_task_results is a list — extract it before writing flat CSV/JSON
+        per_task_results: List[Dict] = common_data.pop("per_task_results", [])
         common_data.update(sys_meta)
         common_data["pkg_power_w"]  = str(tm.pkg_power_w)
         common_data["dram_power_w"] = str(tm.dram_power_w)
@@ -932,6 +1076,29 @@ def main() -> None:
         rw = ResultsJsonWriter(output_dir=out_dir, run_id=run_id)
         rw.add_row(common_data=common_data, rapl_data=tm.rapl_mean)
         rw.save()
+
+        # ── Write per_task_results.csv ────────────────────────────────────────
+        if per_task_results:
+            _pt_csv = out_dir / "per_task_results.csv"
+            _pt_header = [
+                "task_idx", "intent", "result", "runtime_s",
+                "num_requests", "prompt_tokens", "completion_tokens",
+                "avg_prompt_eval_tok_s", "avg_gen_tok_s", "avg_ttft_ms",
+            ]
+            for _pt in per_task_results:
+                _pt_row = [
+                    str(_pt.get("task_idx",              "")),
+                    str(_pt.get("intent",                "")),
+                    str(_pt.get("result",                "")),
+                    str(_pt.get("runtime_s",             "")),
+                    str(_pt.get("num_requests",          "")),
+                    str(_pt.get("prompt_tokens",         "")),
+                    str(_pt.get("completion_tokens",     "")),
+                    str(_pt.get("avg_prompt_eval_tok_s", "")),
+                    str(_pt.get("avg_gen_tok_s",         "")),
+                    str(_pt.get("avg_ttft_ms",           "")),
+                ]
+                write_csv_row(_pt_csv, _pt_header, _pt_row, verbose=False)
 
         # ── Final Summary ─────────────────────────────────────────────────────
         total_tokens = (infer_metrics.get("total_prompt_tokens", 0)
@@ -967,6 +1134,29 @@ def main() -> None:
         print(f"  Tasks Completed  : {bench_results.get('tasks_completed', 'N/A')}/{bench_results.get('n_tasks', 'N/A')}")
         print(f"  Success Rate     : {bench_results.get('success_rate', 'N/A')}%")
         print(f"  Total Runtime    : {bench_results.get('total_runtime_s', 'N/A')}s")
+
+        # ── Per-Task Results table ────────────────────────────────────────────
+        if per_task_results:
+            _sep = "─" * 66
+            print(f"\n  ── Per-Task Results {_sep[:47]}")
+            print(f"  {'Task':>4}  {'Result':<6}  {'Runtime':>7}  "
+                  f"{'Prompt':>9}  {'Gen':>7}  {'TTFT':>8}  Intent")
+            print(f"  {_sep}")
+            for _pt in per_task_results:
+                _tidx    = _pt.get("task_idx",              "?")
+                _res     = _pt.get("result",                "?")
+                _rt      = _pt.get("runtime_s",             0)
+                _ape     = _pt.get("avg_prompt_eval_tok_s", 0)
+                _agen    = _pt.get("avg_gen_tok_s",         0)
+                _attft   = _pt.get("avg_ttft_ms",           0)
+                _intent  = (_pt.get("intent", "") or "")[:_INTENT_DISPLAY_MAX_LEN]
+                _ttft_s  = f"{_attft/1000:.1f}s" if isinstance(_attft, (int, float)) and _attft > 0 else "N/A"
+                _pe_str  = f"{_ape}t/s"  if isinstance(_ape,  (int, float)) and _ape  > 0 else "N/A"
+                _gen_str = f"{_agen}t/s" if isinstance(_agen, (int, float)) and _agen > 0 else "N/A"
+                print(f"  {_tidx:>4}  {_res:<6}  {_rt:>6}s  "
+                      f"{_pe_str:>9}  {_gen_str:>7}  {_ttft_s:>8}  {_intent}")
+            print(f"  {_sep}")
+
         if infer_metrics:
             avg_pe  = infer_metrics.get("avg_prompt_eval_tok_s", "N/A")
             avg_gen = infer_metrics.get("avg_generation_tok_s",  "N/A")
