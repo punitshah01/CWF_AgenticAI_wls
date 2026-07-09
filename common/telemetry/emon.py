@@ -102,21 +102,42 @@ class EmonCollector:
     # ── Driver management ─────────────────────────────────────────────────────
 
     def reload_drivers(self) -> bool:
-        """Reload SEP kernel drivers (insmod-sep / rmmod-sep)."""
+        """Build (if needed) and reload SEP kernel drivers."""
         sepsrc = self.sep_dir / "sepdk" / "src"
         if not sepsrc.exists():
             print(f"[emon] SEPDK src not found: {sepsrc}")
             return False
+
+        sep_vars = self.sep_dir / "sep_vars.sh"
+
+        # Build drivers if .ko files not found
+        build_driver = sepsrc / "build-driver"
+        if build_driver.exists():
+            ko_files = list(sepsrc.glob("*.ko"))
+            if not ko_files:
+                print("[emon] Building SEP drivers...")
+                r = subprocess.run(
+                    [str(build_driver), "-ni"],
+                    cwd=str(sepsrc),
+                    capture_output=True, text=True, timeout=120,
+                )
+                if r.returncode != 0:
+                    print(f"[emon] Driver build warning: exit code {r.returncode}\n"
+                          f"  stderr: {(r.stderr or '')[-200:]}")
+
+        # rmmod then insmod (source sep_vars.sh for PATH)
         print("[emon] Reloading SEP drivers …")
-        for script, descr in [("rmmod-sep", "rmmod"), ("insmod-sep", "insmod")]:
+        for script in ["rmmod-sep", "insmod-sep"]:
             s = sepsrc / script
             if s.exists():
-                r = subprocess.run(["sudo", str(s)], capture_output=True,
-                                   text=True, timeout=30)
-                if r.returncode != 0:
-                    print(f"[emon] {descr} returned {r.returncode}: {r.stderr}")
-                    if descr == "insmod":
-                        return False
+                r = subprocess.run(
+                    f"source {sep_vars} && {s}" if sep_vars.exists() else str(s),
+                    shell=True, executable="/bin/bash",
+                    capture_output=True, text=True, timeout=30,
+                )
+                if r.returncode != 0 and script == "insmod-sep":
+                    print(f"[emon] {script} failed: {(r.stderr or '')[-200:]}")
+                    return False
         return True
 
     # ── Collection lifecycle (pnpwls pattern) ──────────────────────────────────

@@ -312,22 +312,65 @@ def _ensure_webarena_patched() -> None:
 
 
 def _preflight_emon() -> None:
-    """Print EMON availability diagnostic; does not abort."""
-    sep_vars = Path("/opt/intel/sep/sep_vars.sh")
+    """Ensure EMON is ready: build drivers if needed, load them, verify."""
+    sep_dir = Path("/opt/intel/sep")
+    sep_vars = sep_dir / "sep_vars.sh"
+
     if not sep_vars.exists():
-        print("[WARN] EMON: /opt/intel/sep/sep_vars.sh not found — EMON disabled.\n"
-              "  Fix: install SEP 5.58 beta to /opt/intel/sep", file=sys.stderr)
-        return
+        print("[ERROR] /opt/intel/sep/sep_vars.sh not found — EMON requires SEP installation.\n"
+              "  Fix: install SEP 5.58 beta to /opt/intel/sep",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Step 1: Check if emon already works
     check = subprocess.run(
         f"source {sep_vars} && emon -version",
         shell=True, executable="/bin/bash", capture_output=True, text=True,
     )
-    if check.returncode != 0:
-        print("[WARN] EMON binary found but not working — drivers may not be loaded.\n"
-              "  Fix: source /opt/intel/sep/sep_vars.sh && /opt/intel/sep/insmod-sep",
-              file=sys.stderr)
+    if check.returncode == 0:
+        print(f"[emon] Ready: {check.stdout.strip().splitlines()[0]}")
+        return
+
+    # Step 2: Build drivers
+    build_driver = sep_dir / "sepdk" / "src" / "build-driver"
+    if build_driver.exists():
+        print("[emon] Building SEP kernel drivers (this takes ~30s)...")
+        r = subprocess.run(
+            [str(build_driver), "-ni"],
+            cwd=str(build_driver.parent),
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode == 0:
+            print("[emon] Driver build successful")
+        else:
+            print(f"[emon] Driver build returned {r.returncode} — continuing (insmod may still succeed)\n"
+                  f"  stderr: {(r.stderr or '')[-300:]}")
+
+    # Step 3: Load drivers with insmod-sep (must source sep_vars.sh first)
+    insmod = sep_dir / "sepdk" / "src" / "insmod-sep"
+    if insmod.exists():
+        print("[emon] Loading SEP kernel modules...")
+        r = subprocess.run(
+            f"source {sep_vars} && {insmod}",
+            shell=True, executable="/bin/bash",
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode != 0:
+            print(f"[emon] insmod-sep warning: {(r.stderr or '')[-300:]}")
+
+    # Step 4: Verify emon works now
+    check = subprocess.run(
+        f"source {sep_vars} && emon -version",
+        shell=True, executable="/bin/bash", capture_output=True, text=True,
+    )
+    if check.returncode == 0:
+        print(f"[emon] Ready: {check.stdout.strip().splitlines()[0]}")
     else:
-        print(f"[INFO] EMON ready: {check.stdout.strip().splitlines()[0]}")
+        print("[ERROR] EMON still not working after driver build + load.\n"
+              f"  stderr: {(check.stderr or '')[-300:]}\n"
+              "  Try manually: source /opt/intel/sep/sep_vars.sh && emon -version",
+              file=sys.stderr)
+        sys.exit(1)
 
 
 def _ensure_magento_configured() -> None:
