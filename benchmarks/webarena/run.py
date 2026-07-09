@@ -6,9 +6,10 @@ Starts evaluation against self-hosted Docker web services using a local
 LLM inference server and headless Playwright Chromium.
 
 Usage:
-  python3 benchmarks/webarena/run.py --model 8b                    # smoke test with Ollama
-  python3 benchmarks/webarena/run.py --model 70b --inference-cores 96
-  python3 benchmarks/webarena/run.py --model 8b --emon             # per-task EMON collection
+  python3 benchmarks/webarena/run.py                               # default: 70b model
+  python3 benchmarks/webarena/run.py --model 70b --inference-cores 570
+  python3 benchmarks/webarena/run.py --model 70b --collect-emon    # global steady-state EMON
+  python3 benchmarks/webarena/run.py --model 70b --emon            # per-task EMON collection
   python3 benchmarks/webarena/run.py --start-idx 0 --end-idx 10   # subset
   python3 benchmarks/webarena/run.py --dry-run
 
@@ -18,18 +19,24 @@ Prerequisites:
   3. For EMON: /opt/intel/sep installed + insmod drivers
 
 Arguments:
-  --model            8b | 32b | 70b                          default: 8b
-  --inference-cores  Cores for LLM                           default: 96
-  --env-cores        Cores for Playwright + services         default: 48
+  --model            8b | 32b | 70b                          default: 70b
+  --ollama-model     Override exact Ollama model name        default: auto from --model
+  --inference-cores  Cores for LLM                           default: auto
+  --env-cores        Cores for Playwright + services         default: auto
   --start-idx        First task index                        default: 0
   --end-idx          Last task index (exclusive)             default: 812
   --llm-port         API port (11434=Ollama, 8000=llama.cpp) default: 11434
   --run-id           Unique label                            default: auto
-  --collect-emon     Enable EMON collection (needs SEP)
-  --collect-rapl     Enable RAPL power monitoring (default: on)
+  --collect-emon     Global steady-state EMON: 180s warmup + 300s collection, then
+                     EDP post-processing (Excel/CSV output). Disables RAPL.
+  --collect-rapl     Enable RAPL power monitoring            default: off
   --collect-temp     Enable temperature monitoring
   --emon             Collect EMON per task (start 2s after [Intent], stop at [Result])
   --dry-run          Print config, do not run
+
+EMON modes (independent, can be combined):
+  --collect-emon   Global: waits 3 min for steady state, collects 5 min, generates Excel
+  --emon           Per-task: start/stop EMON around each individual task
 """
 
 import argparse
@@ -141,8 +148,9 @@ def parse_args() -> argparse.Namespace:
         description="WebArena evaluation runner for CWF",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--model",           default="8b",
-                    help="Model shortcut: 8b | 32b | 70b (maps to llama3:<size>)")
+    p.add_argument("--model",           default="70b",
+                    help="Model shortcut: 8b | 32b | 70b (maps to llama3.1:<size>). "
+                         "70b is the CWF sweet spot: 405b times out on CPU, 8b is too weak.")
     p.add_argument("--ollama-model",    default="", metavar="NAME",
                     help="Override the Ollama model name (e.g. 'llama3.1:70b'). "
                          "If empty, auto-maps from --model (llama3:8b / 32b / 70b).")
@@ -165,7 +173,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--emon",            action="store_true",
                     help="Collect a separate EMON file per task (start 2s after [Intent], stop at [Result]). "
                          "Saves to telemetry/task_N/emon_task_N.txt. Requires /opt/intel/sep.")
-    p.add_argument("--collect-rapl",    action="store_true", default=True)
+    p.add_argument("--collect-emon",    action="store_true",
+                    help="Global steady-state EMON: wait 180s warmup after workload starts, "
+                         "collect for 300s, then post-process with EDP to generate Excel/CSV. "
+                         "Disables RAPL (EMON captures power counters). Requires /opt/intel/sep.")
+    p.add_argument("--collect-rapl",    action="store_true", default=False,
+                    help="Enable RAPL power monitoring. Off by default when --collect-emon is used "
+                         "(EMON already captures power counters).")
     p.add_argument("--collect-temp",    action="store_true")
     p.add_argument("--dry-run",         action="store_true")
     return p.parse_args()
@@ -425,7 +439,10 @@ def build_run_id(args: argparse.Namespace) -> str:
         return args.run_id
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     n = args.end_idx - args.start_idx
-    return f"webarena_{args.model}_{args.inference_cores}c_{n}tasks_{ts}"
+    # Use actual resolved model name so the run ID reflects the real model.
+    # Sanitize colons and slashes (e.g. "llama3.1:405b" → "llama3.1-405b").
+    model_key = _resolve_model_name(args).replace(":", "-").replace("/", "-")
+    return f"webarena_{model_key}_{args.inference_cores}c_{n}tasks_{ts}"
 
 
 def _run_with_per_task_emon(
@@ -732,7 +749,7 @@ def main() -> None:
     if not args.dry_run:
         _preflight_playwright()
         _preflight_ollama_model(args, _resolve_model_name(args))
-        if args.emon:
+        if args.emon or args.collect_emon:
             _preflight_emon()
         _ensure_magento_configured()
 
@@ -769,11 +786,13 @@ def main() -> None:
         print("  WebArena Runner")
         print(f"  Run ID    : {run_id}")
         print(f"  Platform  : {platform}")
-        print(f"  Model     : {args.model} ({model_label})  Inf-cores: {args.inference_cores}")
+        print(f"  Model     : {model_label}  Inf-cores: {args.inference_cores}")
         print(f"  Tasks     : {args.start_idx}..{args.end_idx}")
         print(f"  Output    : {out_dir}")
         if args.emon:
             print("  EMON      : per-task mode (start +2s after [Intent], stop at [Result])")
+        if args.collect_emon:
+            print("  EMON      : global steady-state (180s warmup → 300s collection → EDP)")
         print(f"{'='*60}\n")
 
         sys_meta = get_system_metadata(cpu, os_info, run_id=run_id,
@@ -794,13 +813,30 @@ def main() -> None:
         except Exception as _e:
             print(f"[WARN] Could not write system_metadata.json: {_e}", file=sys.stderr)
 
-        # --emon manages its own per-task EmonCollector instances; global EMON disabled in TM.
+        # Warn early if EMON window may not be fully covered
+        if args.collect_emon and not args.dry_run:
+            n_tasks = args.end_idx - args.start_idx
+            if n_tasks == 0:
+                print(
+                    "[WARN] --collect-emon with 0 tasks: EMON will start but workload "
+                    "finishes immediately before the 300s collection window completes.",
+                    file=sys.stderr,
+                )
+
+        # When --collect-emon is active, EMON captures power counters so RAPL is
+        # redundant.  Allow explicit --collect-rapl to override this for edge cases.
+        collect_rapl_effective = args.collect_rapl and not args.collect_emon
+
+        # --emon manages its own per-task EmonCollector instances; global EMON is
+        # controlled by --collect-emon.
         tm = TelemetryManager(
             output_dir=str(out_dir / "telemetry"),
             platform=platform,
-            collect_emon=False,
-            collect_rapl=args.collect_rapl,
+            collect_emon=args.collect_emon,
+            collect_rapl=collect_rapl_effective,
             collect_temp=args.collect_temp,
+            emon_warmup_s=180 if args.collect_emon else 0,
+            emon_duration_s=300 if args.collect_emon else None,
         )
         _TELEMETRY_MANAGER = tm
 
@@ -811,7 +847,7 @@ def main() -> None:
 
         if not args.dry_run:
             print("\n[telemetry] Stopping collectors and processing EMON...")
-            tm.stop(process_emon=False, sockets=cpu.get_sockets())
+            tm.stop(process_emon=args.collect_emon, sockets=cpu.get_sockets())
             print("[telemetry] Collection complete.")
 
         # ── Collect inference metrics from proxy ──────────────────────────────
@@ -846,6 +882,9 @@ def main() -> None:
         common_data["ollama_model_size_gb"]    = ollama_meta.get("ollama_model_size_gb","N/A")
         common_data["ollama_quantization"]     = ollama_meta.get("ollama_quantization", "N/A")
         common_data["ollama_num_threads"]      = ollama_meta.get("ollama_num_threads",  "N/A")
+        # EMON telemetry status (for --collect-emon global mode)
+        common_data["emon_collected"]          = str(tm.emon_ready)
+        common_data["emon_output_dir"]         = str(tm.emon_output_dir) if tm.emon_output_dir else "N/A"
 
         write_csv_row(out_dir / "results.csv",
                       list(common_data.keys()), list(common_data.values()))
@@ -905,11 +944,34 @@ def main() -> None:
                 print(f"    TTFT           : {avg_tt}")
             print(f"    Total Tokens   : {total_tokens:,} (prompt: {pt:,} + completion: {ct:,})")
             print(f"    Inference Time : {total_infer_s}s (of {total_runtime_s:.1f}s total)")
-        print("\n  Power Metrics (RAPL):")
-        print(f"    Package Power  : {pkg_w:.1f}W (mean)")
-        print(f"    DRAM Power     : {dram_w:.1f}W (mean)")
-        if energy_per_tok != "N/A":
-            print(f"    Energy/Token   : {energy_per_tok} J/token")
+        if args.collect_emon:
+            # Global steady-state EMON was active — show EDP output status.
+            _emon_has_file = (
+                tm.emon is not None
+                and tm.emon.output_file is not None
+                and tm.emon.output_file.exists()
+            )
+            _emon_status = "Collected + Processed" if tm.emon_ready else (
+                "Collected (EDP processing failed)" if _emon_has_file
+                else "Not collected (EMON unavailable)"
+            )
+            _emon_out = str(tm.emon_output_dir) if tm.emon_output_dir else "N/A"
+            print("\n  EMON Telemetry:")
+            print(f"    Status         : {_emon_status}")
+            print(f"    Collection     : 300s steady-state (after 180s warmup)")
+            print(f"    Samples        : ~40 (7.5s per sample on CWF)")
+            print(f"    Output         : {_emon_out}")
+            if tm.emon_ready and tm.emon_output_dir:
+                _xlsx = list(Path(tm.emon_output_dir).glob("*socket_view*summary*.xlsx"))
+                if _xlsx:
+                    print(f"    Excel Files    : {', '.join(f.name for f in _xlsx[:3])}")
+        if collect_rapl_effective:
+            # RAPL was active (no --collect-emon, or explicit --collect-rapl override).
+            print("\n  Power Metrics (RAPL):")
+            print(f"    Package Power  : {pkg_w:.1f}W (mean)")
+            print(f"    DRAM Power     : {dram_w:.1f}W (mean)")
+            if energy_per_tok != "N/A":
+                print(f"    Energy/Token   : {energy_per_tok} J/token")
         if args.emon:
             task_dirs = sorted((out_dir / "telemetry").glob("task_*")) if (out_dir / "telemetry").exists() else []
             print(f"\n  Per-task EMON    : {len(task_dirs)} task(s) collected")
