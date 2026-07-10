@@ -56,9 +56,8 @@ This repo contains 5 agentic AI benchmark runners for Intel CWF (Clearwater Fore
 
 ```bash
 # 1. Setup (one-time)
-python3 setup/setup_emon.py
-python3 setup/setup_docker.py
-python3 benchmarks/webarena/setup.py
+python3 scripts/setup.py --install-emon      # shared/common setup (all workloads)
+python3 benchmarks/webarena/setup.py         # workload-specific setup
 
 # 2. Run with telemetry
 python3 benchmarks/webarena/run.py \
@@ -86,7 +85,8 @@ results/
     └── {workload}_{model}_{cores}c_{config}_{timestamp}/
         ├── console_output.log          # All stdout/stderr (tee'd)
         ├── results.csv                 # Appended summary row
-        ├── results.json                # Structured {system, params, kpis, emon_summary}
+        ├── results.json                # {run_id, rows: [{system, results, emon, emon_core, rapl}]}
+                                          #   (see results/README.md for the full schema)
         └── telemetry/
             ├── emon_{run_id}.txt        # Raw EMON data
             ├── __mpp_socket_view_summary.csv
@@ -105,3 +105,18 @@ All runners use the shared `TelemetryManager` from `common/telemetry/`:
 | SSMON/PTAT | Temperature | Disabled | Enable with `--collect-temp` |
 
 See `common/telemetry/telemetry_config.yaml` for global telemetry settings.
+
+## Adding a New Workload
+
+This registry currently lists 5 workloads, but the repo is designed so a
+6th (or Nth) workload requires minimal duplication:
+
+1. Run shared/common setup once: `python3 scripts/setup.py --install-emon`.
+2. Create `benchmarks/<name>/` following the layout and conventions in
+   `docs/architecture.md#how-to-add-a-new-benchmark` (setup.py built on
+   `common/setup_utils.py`, run.py built on `common/cli_utils`,
+   `common/telemetry`, `common/system_metadata`, and
+   `common/json_results.ResultsJsonWriter`).
+3. Add a row to the **Workloads** table above and a **Workload Details**
+   section describing its KPI, LLM port, and CWF BKM core split.
+4. Add `benchmarks/<name>/README.md` documenting run/setup instructions.
