@@ -135,13 +135,15 @@ CWF_AgenticAI_wls/
 │   ├── osworld.yaml
 │   ├── appworld.yaml
 │   └── tbench.yaml
-├── common/                          # Shared Python utilities
+├── common/                          # Shared Python utilities (the "common setup/runtime layer")
 │   ├── cpu_info.py                  # CPUInfo: lscpu topology
 │   ├── os_info.py                   # OSInfo: BIOS, microcode, kernel
 │   ├── platform_info.py             # detect_platform(): CWF/DMR/GNR/...
 │   ├── system_metadata.py           # Full system snapshot OrderedDict
 │   ├── csv_writer.py                # Smart CSV append
 │   ├── json_results.py              # Structured JSON output
+│   ├── setup_utils.py               # Shared helpers for every benchmarks/*/setup.py
+│   │                                 #   (log, banner, run, pip_install, ensure_conda_env, ...)
 │   └── telemetry/
 │       ├── emon.py                  # EMON collection + EDP post-processing
 │       ├── rapl.py                  # RAPL power via powercap sysfs
@@ -164,16 +166,24 @@ CWF_AgenticAI_wls/
 
 ## Quick Start
 
-### Step 1 — Base environment setup
+### Step 0 — Shared/common setup (run once per machine)
 
 ```bash
-# Create Python venv (optional, recommended)
-python3 setup/setup_venv.py --python python3.11
+# Installs base OS packages, Docker, conda, common Python deps, and
+# (with --install-emon) the Intel SEP/EMON telemetry stack.
+# This is the SINGLE place common functionality is installed — every
+# benchmark's own setup.py builds on top of this.
+python3 scripts/setup.py --install-emon
+```
 
-# Apply platform tuning (run as root)
+### Step 1 — Workload-specific setup
+
+```bash
+# Apply platform tuning (run as root) — optional, improves run-to-run consistency
 sudo python3 setup/setup_platform.py
 
-# Install benchmark dependencies
+# Install per-benchmark dependencies (container setup, task data, benchmark repo
+# clones — anything NOT already handled by scripts/setup.py above)
 python3 benchmarks/appworld/setup.py       # lightest — start here
 python3 benchmarks/t-bench/setup.py
 python3 benchmarks/swe-bench/setup.py

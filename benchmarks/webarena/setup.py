@@ -111,60 +111,12 @@ WORKDIR = Path.home() / "cwf_agentic" / "webarena"
 IMAGES_DIR_DEFAULT = Path.home() / "webarena_images"
 
 
-# ── Utilities ─────────────────────────────────────────────────────────────────
+# ── Utilities (shared across all benchmark setup.py scripts) ────────────────
 
-class Color:
-    BLUE = "\033[94m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    BOLD = "\033[1m"
-    RESET = "\033[0m"
-
-
-def log(msg: str, level: str = "info") -> None:
-    colors = {"info": Color.BLUE, "ok": Color.GREEN, "warn": Color.YELLOW, "error": Color.RED}
-    prefix = {"info": "[INFO]", "ok": "[ OK ]", "warn": "[WARN]", "error": "[ERR ]"}
-    c = colors.get(level, "")
-    p = prefix.get(level, "[    ]")
-    print(f"{c}{Color.BOLD}{p}{Color.RESET}{c} {msg}{Color.RESET}", flush=True)
-
-
-def banner(title: str) -> None:
-    print(f"\n{Color.BOLD}{Color.BLUE}{'='*60}{Color.RESET}")
-    print(f"{Color.BOLD}{Color.BLUE}  {title}{Color.RESET}")
-    print(f"{Color.BOLD}{Color.BLUE}{'='*60}{Color.RESET}\n")
-
-
-def run(cmd: str, dry_run: bool = False, check: bool = False,
-        timeout: int = 600) -> subprocess.CompletedProcess:
-    """Run a shell command."""
-    print(f"  $ {cmd}", flush=True)
-    if dry_run:
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-    try:
-        result = subprocess.run(cmd, shell=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        log(f"Command timed out after {timeout}s: {cmd}", "warn")
-        return subprocess.CompletedProcess(cmd, 1, "", "timeout")
-    if check and result.returncode != 0:
-        log(f"Command failed (exit {result.returncode}): {cmd}", "error")
-    return result
-
-
-def run_capture(cmd: str, dry_run: bool = False) -> str:
-    """Run command, return stdout."""
-    if dry_run:
-        return ""
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    return result.stdout.strip()
-
-
-def pip_install(pip_bin: str, packages: list, dry_run: bool) -> None:
-    """Install packages idempotently -- pip skips packages already satisfying version constraints."""
-    for i in range(0, len(packages), 20):
-        chunk = " ".join(f'"{p}"' for p in packages[i:i+20])
-        run(f"{pip_bin} install --quiet {chunk}", dry_run=dry_run)
+sys.path.insert(0, str(REPO_ROOT))
+from common.setup_utils import (  # noqa: E402
+    banner, log, pip_install, run, run_capture, write_setup_marker,
+)
 
 
 def get_host_ip() -> str:
@@ -1103,12 +1055,10 @@ def main() -> None:
     # Write .setup_complete marker so run.py can verify setup was done
     if not args.dry_run:
         setup_marker = Path(__file__).resolve().parent / ".setup_complete"
-        setup_marker.write_text(
-            f"WebArena setup completed successfully\n"
-            f"Host: {host}\n"
-            f"Model: {args.model}\n"
+        write_setup_marker(
+            setup_marker, "WebArena",
+            [f"Host: {host}", f"Model: {args.model}"],
         )
-        log(f"Setup marker written: {setup_marker}", "ok")
 
     log("WebArena setup complete!", "ok")
     print("\n[SUCCESS] WebArena setup complete")

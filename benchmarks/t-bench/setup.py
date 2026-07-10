@@ -13,16 +13,20 @@ Usage:
 """
 
 import argparse
-import shutil
-import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
-
-if sys.version_info < (3, 10):
-    sys.exit(f"[ERROR] Python 3.10+ required. Current: {sys.version.split()[0]}")
+from typing import List
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from common.setup_utils import (  # noqa: E402
+    banner, ensure_conda_env, get_conda_pip, log, pip_install,
+    require_python_version, run, write_setup_marker,
+)
+
+require_python_version((3, 10))
+
 CONDA_ENV = "agentic"
 
 PACKAGES: List[str] = [
@@ -39,53 +43,11 @@ PACKAGES: List[str] = [
 ]
 
 # ---------------------------------------------------------------------------
-
-class Color:
-    BLUE = "\033[94m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    BOLD = "\033[1m"
-    RESET = "\033[0m"
-
-def log(msg: str, level: str = "info") -> None:
-    c = {"info": Color.BLUE, "ok": Color.GREEN, "warn": Color.YELLOW, "error": Color.RED}.get(level, "")
-    p = {"info": "[INFO]", "ok": "[ OK ]", "warn": "[WARN]", "error": "[ERR ]"}.get(level, "")
-    print(f"{c}{Color.BOLD}{p}{Color.RESET}{c} {msg}{Color.RESET}", flush=True)
-
-def banner(t: str) -> None:
-    print(f"\n{Color.BOLD}{Color.BLUE}{'='*60}\n  {t}\n{'='*60}{Color.RESET}\n")
-
-def run(cmd: str, dry_run: bool = False, check: bool = False) -> Optional[subprocess.CompletedProcess]:
-    print(f"  $ {cmd}", flush=True)
-    if dry_run:
-        return None
-    return subprocess.run(cmd, shell=True)
-
-def pip_install(pip_bin: str, packages: List[str], dry_run: bool) -> None:
-    """Install packages idempotently -- pip skips packages already satisfying version constraints."""
-    for i in range(0, len(packages), 20):
-        chunk = " ".join(f'"{p}"' for p in packages[i:i+20])
-        run(f"{pip_bin} install --quiet {chunk}", dry_run=dry_run)
-
-def get_conda_pip(conda_env: str) -> str:
-    r = subprocess.run(f"conda run -n {conda_env} which pip",
-                       shell=True, capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 else "pip"
-
+# Setup steps (workload-specific: package list + conda env for T-Bench)
 # ---------------------------------------------------------------------------
 
 def setup_conda_env(conda_env: str, python_version: str, dry_run: bool) -> None:
-    banner("Step 1: Conda Environment")
-    if not shutil.which("conda"):
-        log("conda not found -- run scripts/setup.py first", "error")
-        sys.exit(1)
-    result = subprocess.run("conda env list", shell=True, capture_output=True, text=True)
-    if not dry_run and conda_env in (result.stdout or ""):
-        log(f"Conda env '{conda_env}' already exists.", "ok")
-    else:
-        run(f"conda create -y -n {conda_env} python={python_version}", dry_run=dry_run)
-        log(f"Conda env '{conda_env}' created", "ok")
+    ensure_conda_env(conda_env, python_version, dry_run, banner_title="Step 1: Conda Environment")
 
 def install_packages(conda_env: str, dry_run: bool) -> None:
     banner("Step 2: T-Bench Python Packages")
@@ -111,8 +73,7 @@ def main() -> None:
     log("T-Bench setup complete.", "ok")
     if not args.dry_run:
         setup_marker = Path(__file__).resolve().parent / ".setup_complete"
-        setup_marker.write_text(f"T-Bench setup completed successfully\nconda_env: {args.conda_env}\n")
-        log(f"Setup marker written: {setup_marker}", "ok")
+        write_setup_marker(setup_marker, "T-Bench", [f"conda_env: {args.conda_env}"])
     print(f"\n  Next: conda activate {args.conda_env}")
     print( "        python3 benchmarks/t-bench/run.py")
     print("\n[SUCCESS] T-Bench setup complete")

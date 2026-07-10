@@ -20,6 +20,8 @@ Modules:
     run_generic     — run_cmd(), stream_output()
     tuneup_utils    — set_cpu_governor(), disable_aslr(), restore_defaults()
     metadata        — build_metadata()
+    setup_utils     — shared helpers for benchmarks/*/setup.py (Color, log,
+                       banner, run, pip_install, ensure_conda_env, ...)
     telemetry/      — EMON, RAPL, SSMON, PTAT collectors + TelemetryManager
 """
 
