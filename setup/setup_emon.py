@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 SEP_ROOT = Path("/opt/intel/sep")
 
@@ -209,6 +210,24 @@ def _is_valid_tar_bz2(path: Path) -> bool:
     return probe.returncode == 0
 
 
+def _find_fallback_sep_asset() -> Optional[Path]:
+    """Find any pre-staged SEP installer under assets/installers/ to use as a
+    last-resort fallback when Artifactory is completely unreachable (e.g. down,
+    or this host has no route to ubit-artifactory-or.intel.com). May be a
+    different SEP version than the one requested — callers must warn the user.
+    Tracked via git-lfs (see .gitattributes): assets/installers/*.tar.bz2
+    """
+    installers_dir = REPO_ROOT / "assets" / "installers"
+    if not installers_dir.exists():
+        return None
+    candidates = sorted(installers_dir.glob("sep_private_*.tar.bz2"),
+                         key=lambda p: p.stat().st_mtime, reverse=True)
+    for c in candidates:
+        if _is_valid_tar_bz2(c):
+            return c
+    return None
+
+
 def download_sep(version: str, dry_run: bool) -> Path:
     """Download SEP tarball from artifactory. Returns path to local file."""
     filename = f"{version}.tar.bz2"
@@ -269,14 +288,25 @@ def download_sep(version: str, dry_run: bool) -> Path:
         print(f"[WARN] {label} did not produce a valid tar.bz2 — trying next method.")
         dest.unlink(missing_ok=True)
 
+    print(f"[WARN] All download attempts from Artifactory failed (unreachable or down): {url}",
+          file=sys.stderr)
+    fallback = _find_fallback_sep_asset()
+    if fallback:
+        print(f"[WARN] Falling back to locally staged SEP installer: {fallback}", file=sys.stderr)
+        if fallback.name != filename:
+            print(f"[WARN] NOTE: this is a DIFFERENT SEP version than requested "
+                  f"({filename}) — proceeding anyway since Artifactory is unreachable.",
+                  file=sys.stderr)
+        return fallback
+
     print(f"[ERROR] Could not download a valid SEP archive from {url}", file=sys.stderr)
     print("[ERROR] This host may lack network/VPN access to Intel-internal "
           "Artifactory (ubit-artifactory-or.intel.com). Options:", file=sys.stderr)
     print("        1. Verify intranet/VPN connectivity and DNS resolution to "
           "ubit-artifactory-or.intel.com, then retry.", file=sys.stderr)
-    print(f"        2. Manually download {filename} elsewhere and place it at "
-          f"{REPO_ROOT / 'assets' / 'installers' / filename}, then retry.", file=sys.stderr)
-    print(f"        3. Pass --sep-installer /path/to/{filename} to skip the download.",
+    print(f"        2. Manually download a SEP installer and place it at "
+          f"{REPO_ROOT / 'assets' / 'installers'}/, then retry.", file=sys.stderr)
+    print(f"        3. Pass --sep-installer /path/to/sep_....tar.bz2 to skip the download.",
           file=sys.stderr)
     sys.exit(1)
 

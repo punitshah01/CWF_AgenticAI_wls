@@ -383,7 +383,14 @@ def _download_file(url: str, dest: str, dry_run: bool) -> bool:
 def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
     banner(f"Step 3: Conda Environment  [{conda_env}, Python {python_version}]")
 
-    if not shutil.which("conda"):
+    # Check disk, not just PATH — a non-interactive script invocation won't
+    # have ~/.bashrc sourced even if miniconda3 was already installed by a
+    # previous run, which previously caused a needless reinstall attempt
+    # every time ("File or directory already exists: '/root/miniconda3'").
+    existing_conda_bin = str(Path.home() / "miniconda3" / "bin")
+    already_installed = shutil.which("conda") or Path(existing_conda_bin, "conda").exists()
+
+    if not already_installed:
         log("conda not found — installing Miniconda ...", "info")
         installer = "/tmp/miniconda.sh"
         cached = Path(MINICONDA_LOCAL)
