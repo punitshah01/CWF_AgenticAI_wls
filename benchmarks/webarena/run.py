@@ -51,7 +51,7 @@ import urllib.error
 import urllib.request
 import warnings
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 # Suppress beartype PEP 585 deprecation warnings from third-party dependencies
 # (gymnasium uses typing.Mapping[...] instead of collections.abc.Mapping[...]).
@@ -100,7 +100,7 @@ from common.system_metadata import get_system_metadata, get_ollama_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
-from common.telemetry.emon import EmonCollector
+from common.telemetry.emon import EmonCollector, _read_emon_csv
 from common.cli_utils import setup_tee_logging, teardown_logging
 from benchmarks.webarena.lib.ollama_metrics import OllamaMetricsProxy
 
@@ -174,6 +174,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--llm-port",        type=int, default=11434,
                     help="LLM API port (11434=Ollama, 8000=llama.cpp)")
     p.add_argument("--run-id",          default="")
+    p.add_argument("--session",         default="", metavar="NAME",
+                    help="Human-readable session/run label (e.g. 'baseline_qwen72b'). "
+                         "Prefixed onto the auto-generated run-id and stored as a column "
+                         "in results.csv / summary.csv so multiple runs are easy to tell apart.")
     p.add_argument("--emon",            action="store_true",
                     help="Collect a separate EMON file per task (start 2s after [Intent], stop at [Result]). "
                          "Saves to telemetry/task_N/emon_task_N.txt. Requires /opt/intel/sep.")
@@ -481,6 +485,27 @@ def _preflight_ollama_model(args: argparse.Namespace, model_name: str) -> None:
     sys.exit(1)
 
 
+def _read_task_emon_views(emon_out_dir: Path) -> Dict[str, Tuple[str, str]]:
+    """Read whichever system/socket/core/uncore EDP summary CSVs exist in
+    *emon_out_dir* (the directory passed as EmonCollector.process_emon_with_edp's
+    ``-o`` basename is always ``processed``, so files are named
+    ``processed__mpp_<view>_view_summary.csv``).
+
+    Returns {view_name: (header_csv_str, values_csv_str)} for whichever views
+    were actually produced — missing files are silently skipped.
+    """
+    out: Dict[str, Tuple[str, str]] = {}
+    if not emon_out_dir.exists():
+        return out
+    for view in ("system", "socket", "core", "uncore"):
+        csv_path = emon_out_dir / f"processed__mpp_{view}_view_summary.csv"
+        if csv_path.exists():
+            header, values = _read_emon_csv(csv_path)
+            if header:
+                out[view] = (header, values)
+    return out
+
+
 def build_run_id(args: argparse.Namespace) -> str:
     if args.run_id:
         return args.run_id
@@ -489,7 +514,8 @@ def build_run_id(args: argparse.Namespace) -> str:
     # Use actual resolved model name so the run ID reflects the real model.
     # Sanitize colons and slashes (e.g. "llama3.1:405b" → "llama3.1-405b").
     model_key = _resolve_model_name(args).replace(":", "-").replace("/", "-")
-    return f"webarena_{model_key}_{args.inference_cores}c_{n}tasks_{ts}"
+    prefix = f"{args.session}_" if args.session else ""
+    return f"{prefix}webarena_{model_key}_{args.inference_cores}c_{n}tasks_{ts}"
 
 
 def _run_with_task_tracking(
@@ -1060,6 +1086,7 @@ def main() -> None:
                 print(f"[WARN] Could not write inference_metrics.json: {_e}", file=sys.stderr)
 
         common_data: OrderedDict = OrderedDict()
+        common_data["session"] = args.session or run_id
         common_data.update(bench_results)
         # per_task_results is a list — extract it before writing flat CSV/JSON
         per_task_results: List[Dict] = common_data.pop("per_task_results", [])
@@ -1114,6 +1141,86 @@ def main() -> None:
                     str(_pt.get("avg_ttft_ms",           "")),
                 ]
                 write_csv_row(_pt_csv, _pt_header, _pt_row, verbose=False)
+
+        # ── Write summary.csv: one row PER TASK with KPI + system metadata +
+        # EMON views merged in (mirrors pnpwls/speccpu's summary CSV pattern).
+        # Columns are stable across rows so the file stays append-friendly if
+        # you point multiple runs at results/webarena/summary.csv over time.
+        if per_task_results:
+            _emon_mode = "per_task" if args.emon else ("global" if args.collect_emon else "none")
+
+            # Resolve each task's EMON view dir once, and cache the canonical
+            # header (column names) per view — the first task that has data
+            # sets the layout; tasks missing that view are padded with blanks
+            # so every row has the same column count.
+            _task_views: Dict[int, Dict[str, Tuple[str, str]]] = {}
+            _view_headers: Dict[str, List[str]] = {}
+            for _pt in per_task_results:
+                _tidx = _pt.get("task_idx")
+                _views: Dict[str, Tuple[str, str]] = {}
+                if args.emon:
+                    _emon_dir = (out_dir / "telemetry" / f"task_{_tidx}"
+                                 / f"emon_emon_task_{_tidx}")
+                    _views = _read_task_emon_views(_emon_dir)
+                elif args.collect_emon and tm.emon_ready and tm.emon_output_dir:
+                    _views = _read_task_emon_views(Path(tm.emon_output_dir))
+                _task_views[_tidx] = _views
+                for _vname, (_vheader, _vvals) in _views.items():
+                    if _vname not in _view_headers:
+                        _view_headers[_vname] = [c.strip() for c in _vheader.split(",")]
+
+            # Full system metadata + run-level KPIs, identical for every row.
+            _run_level = OrderedDict()
+            _run_level["session"]          = args.session or run_id
+            _run_level["run_id"]           = run_id
+            _run_level["model"]            = model_label
+            _run_level["platform"]         = platform
+            for _k, _v in sys_meta.items():
+                _run_level[_k] = _v
+            _run_level["n_tasks"]          = bench_results.get("n_tasks", "")
+            _run_level["tasks_completed"]  = bench_results.get("tasks_completed", "")
+            _run_level["success_rate"]     = bench_results.get("success_rate", "")
+            _run_level["total_runtime_s"]  = bench_results.get("total_runtime_s", "")
+            _run_level["pkg_power_w"]      = str(tm.pkg_power_w)
+            _run_level["dram_power_w"]     = str(tm.dram_power_w)
+            _run_level["emon_mode"]        = _emon_mode
+            _run_level["emon_collected"]   = str(tm.emon_ready) if args.collect_emon else str(bool(_task_views))
+
+            _summary_header = (
+                ["task_idx", "intent", "result", "runtime_s",
+                 "num_requests", "prompt_tokens", "completion_tokens",
+                 "avg_prompt_eval_tok_s", "avg_gen_tok_s", "avg_ttft_ms"]
+                + list(_run_level.keys())
+            )
+            for _vname, _vheader_cols in _view_headers.items():
+                _summary_header += [f"emon_{_vname}_{c}" for c in _vheader_cols]
+
+            _summary_csv = out_dir / "summary.csv"
+            for _pt in per_task_results:
+                _tidx = _pt.get("task_idx")
+                _row = [
+                    str(_pt.get("task_idx",              "")),
+                    str(_pt.get("intent",                "")),
+                    str(_pt.get("result",                "")),
+                    str(_pt.get("runtime_s",             "")),
+                    str(_pt.get("num_requests",          "")),
+                    str(_pt.get("prompt_tokens",         "")),
+                    str(_pt.get("completion_tokens",     "")),
+                    str(_pt.get("avg_prompt_eval_tok_s", "")),
+                    str(_pt.get("avg_gen_tok_s",         "")),
+                    str(_pt.get("avg_ttft_ms",           "")),
+                ] + [str(v) for v in _run_level.values()]
+
+                for _vname, _vheader_cols in _view_headers.items():
+                    _views = _task_views.get(_tidx, {})
+                    if _vname in _views:
+                        _row += _views[_vname][1].split(",")
+                    else:
+                        _row += [""] * len(_vheader_cols)
+
+                write_csv_row(_summary_csv, _summary_header, _row, verbose=False)
+            print(f"[webarena] summary.csv written → {_summary_csv} "
+                  f"({len(per_task_results)} task rows, emon_mode={_emon_mode})")
 
         # ── Final Summary ─────────────────────────────────────────────────────
         total_tokens = (infer_metrics.get("total_prompt_tokens", 0)

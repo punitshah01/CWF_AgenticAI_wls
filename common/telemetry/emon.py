@@ -274,7 +274,7 @@ class EmonCollector:
         begin_sample: int = DEFAULT_BEGIN_SAMPLE,
         dirty_samples: int = DEFAULT_DIRTY_SAMPLES,
         target_samples: int = 600,
-        views: Tuple[str, ...] = ("socket-view",),
+        views: Tuple[str, ...] = ("system-view", "socket-view", "core-view", "uncore-view"),
         parallel_threads: Optional[int] = None,
         archive_raw: bool = True,
     ) -> Optional[Path]:

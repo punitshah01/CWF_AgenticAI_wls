@@ -37,7 +37,7 @@ def main() -> None:
     parser.add_argument("--dirty", type=int, default=400,
                         help="Dirty samples to skip at end (default: 400)")
     parser.add_argument("--views", nargs="+",
-                        default=["socket_view", "core_view"],
+                        default=["system-view", "socket-view", "core-view", "uncore-view"],
                         help="EDP views to generate")
     args = parser.parse_args()
 
