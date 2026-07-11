@@ -61,6 +61,11 @@ MINICONDA_LOCAL = os.environ.get(
 
 # Base system packages — same on every CWF node regardless of benchmark
 # Format: {ubuntu_pkg: centos_pkg}  (None = same name on both distros)
+# NOTE: 'perf' is intentionally NOT here — there is no 'perf' apt package on
+# Ubuntu (it ships as linux-tools-<kernel>); it is installed separately by
+# install_perf_tools() so a missing/unmatched kernel-tools package can never
+# block the rest of this list (apt-get install fails atomically on any
+# unlocatable package name).
 BASE_SYSTEM_PKGS: Dict[str, Optional[str]] = {
     "git":             None,
     "git-lfs":         None,
@@ -75,7 +80,6 @@ BASE_SYSTEM_PKGS: Dict[str, Optional[str]] = {
     "numactl":         None,
     "hwloc":           None,
     "msr-tools":       None,
-    "perf":            "perf",
     "sysstat":         None,
 }
 
@@ -170,6 +174,60 @@ def detect_os() -> Dict[str, str]:
 # Step 1: Base system packages
 # ---------------------------------------------------------------------------
 
+def _apt_install_resilient(pkgs: List[str], dry_run: bool) -> None:
+    """Install packages via apt-get, falling back to one-by-one installs.
+
+    apt-get install fails ATOMICALLY if even one package name can't be
+    located — none of the requested packages get installed, not just the
+    bad one. Retrying individually isolates the failure so a single typo'd
+    or unavailable package name never blocks the rest of the list.
+    """
+    result = run(f"sudo apt-get install -y {' '.join(pkgs)}", dry_run=dry_run, check=False)
+    if dry_run or (result is not None and result.returncode == 0):
+        return
+    log("Bulk apt install failed — retrying packages individually ...", "warn")
+    failed = []
+    for pkg in pkgs:
+        r = run(f"sudo apt-get install -y {pkg}", dry_run=dry_run, check=False)
+        if r is not None and r.returncode != 0:
+            failed.append(pkg)
+    if failed:
+        log(f"Packages unavailable/failed (skipped): {', '.join(failed)}", "warn")
+
+
+def _dnf_install_resilient(pkgs: List[str], dry_run: bool) -> None:
+    """Install packages via dnf/yum, falling back to one-by-one on bulk failure."""
+    result = run(f"sudo dnf install -y {' '.join(pkgs)} || sudo yum install -y {' '.join(pkgs)}",
+                 dry_run=dry_run, check=False)
+    if dry_run or (result is not None and result.returncode == 0):
+        return
+    log("Bulk dnf/yum install failed — retrying packages individually ...", "warn")
+    failed = []
+    for pkg in pkgs:
+        r = run(f"sudo dnf install -y {pkg} || sudo yum install -y {pkg}", dry_run=dry_run, check=False)
+        if r is not None and r.returncode != 0:
+            failed.append(pkg)
+    if failed:
+        log(f"Packages unavailable/failed (skipped): {', '.join(failed)}", "warn")
+
+
+def install_perf_tools(os_info: Dict[str, str], dry_run: bool) -> None:
+    """Install the 'perf' profiler — optional, non-fatal on failure.
+
+    Ubuntu has no 'perf' apt package; it ships inside linux-tools-<kernel>.
+    That package name is only valid for the exact running kernel, so on
+    minimal/cloud images it can be unavailable — never let that block setup.
+    """
+    family = os_info["family"]
+    if family == "ubuntu":
+        run("sudo apt-get install -y linux-tools-common linux-tools-generic "
+            "linux-tools-$(uname -r)", dry_run=dry_run, check=False)
+    elif family == "centos":
+        run("sudo dnf install -y perf || sudo yum install -y perf", dry_run=dry_run, check=False)
+    if not dry_run and not shutil.which("perf"):
+        log("perf not available (non-fatal) — EMON/SEP does not require it.", "warn")
+
+
 def install_system_base(os_info: Dict[str, str], dry_run: bool) -> None:
     banner("Step 1: Base System Packages")
     family = os_info["family"]
@@ -177,7 +235,7 @@ def install_system_base(os_info: Dict[str, str], dry_run: bool) -> None:
     if family == "ubuntu":
         run("sudo apt-get update -y", dry_run=dry_run, check=False)
         pkgs = list(BASE_SYSTEM_PKGS.keys())
-        run(f"sudo apt-get install -y {' '.join(pkgs)}", dry_run=dry_run, check=False)
+        _apt_install_resilient(pkgs, dry_run)
 
     elif family == "centos":
         run("sudo dnf update -y --quiet || sudo yum update -y --quiet",
@@ -188,12 +246,12 @@ def install_system_base(os_info: Dict[str, str], dry_run: bool) -> None:
                 pkgs.append(ubuntu_pkg)
             elif centos_pkg:
                 pkgs.extend(centos_pkg.split())
-        run(f"sudo dnf install -y {' '.join(pkgs)} || sudo yum install -y {' '.join(pkgs)}",
-            dry_run=dry_run, check=False)
+        _dnf_install_resilient(pkgs, dry_run)
     else:
         log(f"Unknown OS family '{family}' — skipping system packages.", "warn")
         return
 
+    install_perf_tools(os_info, dry_run)
     log("Base system packages installed", "ok")
 
 
@@ -301,10 +359,14 @@ def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
             installer = str(cached)
             log(f"Using cached installer: {cached}", "ok")
         else:
-            # --no-check-certificate handles Intel corp SSL inspection on internal networks
-            run(f"wget --no-check-certificate -q "
-                f"https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
-                f" -O {installer}", dry_run=dry_run, check=False)
+            # NOTE: this is a PUBLIC internet URL, not an internal Intel host —
+            # unlike Artifactory downloads it must go THROUGH the corp proxy
+            # (if one is configured via HTTP_PROXY/HTTPS_PROXY env vars), so
+            # we deliberately do NOT disable proxying here. --no-check-certificate
+            # / -k only bypass corp SSL-inspection certs, they don't touch proxying.
+            miniconda_url = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
+            run(f"wget --no-check-certificate -q {miniconda_url} -O {installer}",
+                dry_run=dry_run, check=False)
             # Validate: miniconda script must start with '#!/'
             if not dry_run:
                 try:
@@ -313,15 +375,19 @@ def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
                     if magic != b"#!/":
                         log(f"Downloaded miniconda installer looks invalid (got {magic!r}) — "
                             "check network/proxy. Trying curl as fallback.", "warn")
-                        run(f"curl --no-proxy --insecure -L "
-                            f"https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
-                            f" -o {installer}", dry_run=False, check=False)
+                        run(f"curl -k -L {miniconda_url} -o {installer}",
+                            dry_run=False, check=False)
                 except OSError:
                     pass
         run(f"bash {installer} -b -p {Path.home()}/miniconda3",
             dry_run=dry_run, check=False)
         # Update PATH immediately so all subsequent conda calls in this process work
         conda_bin = str(Path.home() / "miniconda3" / "bin")
+        if not dry_run and not Path(conda_bin, "conda").exists():
+            log(f"Miniconda install failed \u2014 {conda_bin}/conda not found after install.", "error")
+            log("Check network/proxy access to repo.anaconda.com and retry, or pre-download the "
+                f"installer to {MINICONDA_LOCAL} and rerun.", "error")
+            sys.exit(1)
         os.environ["PATH"] = conda_bin + ":" + os.environ.get("PATH", "")
         run(f"{conda_bin}/conda init bash", dry_run=dry_run, check=False)
         # Write a one-liner to /etc/profile.d so root's non-interactive shells also get conda
@@ -363,11 +429,22 @@ def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
 # Step 4: git-lfs
 # ---------------------------------------------------------------------------
 
-def setup_git_lfs(dry_run: bool) -> None:
+def setup_git_lfs(os_info: Dict[str, str], dry_run: bool) -> None:
     banner("Step 4: git-lfs")
-    if shutil.which("git-lfs") and not dry_run:
-        log("git-lfs already installed.", "ok")
+    if not (shutil.which("git-lfs") or dry_run):
+        # Step 1 should have installed this already; install directly here too
+        # so `--skip-system` or a partial Step 1 failure still gets git-lfs.
+        log("git-lfs binary not found — installing package ...", "info")
+        if os_info["family"] == "ubuntu":
+            run("sudo apt-get install -y git-lfs", dry_run=dry_run, check=False)
+        elif os_info["family"] == "centos":
+            run("sudo dnf install -y git-lfs || sudo yum install -y git-lfs",
+                dry_run=dry_run, check=False)
+
+    if not dry_run and not shutil.which("git-lfs"):
+        log("git-lfs package install failed — skipping hook setup.", "warn")
         return
+
     run("git lfs install --system || git lfs install", dry_run=dry_run, check=False)
     log("git-lfs ready", "ok")
 
@@ -525,7 +602,7 @@ def main() -> None:
     if not args.skip_docker:
         install_docker(os_info, args.dry_run)
 
-    setup_git_lfs(args.dry_run)
+    setup_git_lfs(os_info, args.dry_run)
 
     if not args.skip_conda:
         setup_conda(args.conda_env, args.python_version, args.dry_run)
