@@ -456,7 +456,10 @@ def _preflight_ollama_model(args: argparse.Namespace, model_name: str) -> None:
     """Check that the requested model exists in Ollama; print available models if not."""
     try:
         url = f"http://localhost:{args.llm_port}/api/tags"
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        # Bypass any HTTP_PROXY/HTTPS_PROXY inherited from the launching shell —
+        # this is always a localhost call (see ollama_metrics.py for the same fix).
+        _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with _opener.open(url, timeout=5) as resp:
             data = json.loads(resp.read())
         available = [m["name"] for m in data.get("models", [])]
     except Exception:

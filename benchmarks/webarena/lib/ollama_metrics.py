@@ -45,6 +45,17 @@ from typing import Dict, List, Optional
 # take 30+ minutes per request; 2 hours gives ample headroom without hanging forever.
 INFERENCE_TIMEOUT_S = 7200
 
+# CRITICAL: this proxy always talks to localhost (Ollama on ollama_port), but
+# urllib.request.urlopen() honors HTTP_PROXY/HTTPS_PROXY from THIS process's
+# own os.environ by default (unlike the child WebArena subprocess, whose env
+# dict is explicitly sanitized in run.py). If the shell that launched run.py
+# had a corporate proxy exported (e.g. left over from `ollama pull` proxy
+# troubleshooting), every forwarded request here would get routed through it
+# and rejected with an HTTP 403 "incorrect proxy service was requested" from
+# the corporate proxy — even though the destination is 127.0.0.1. Use an
+# explicit no-proxy opener for all internal localhost forwarding.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 class OllamaMetricsProxy:
     """HTTP proxy that captures per-request Ollama inference timing.
@@ -135,7 +146,7 @@ class OllamaMetricsProxy:
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
-                    with urllib.request.urlopen(req_obj, timeout=INFERENCE_TIMEOUT_S) as r:
+                    with _NO_PROXY_OPENER.open(req_obj, timeout=INFERENCE_TIMEOUT_S) as r:
                         resp_body = r.read()
                     wall_time_s = time.time() - t0
                     native_resp = json.loads(resp_body)
@@ -215,7 +226,7 @@ class OllamaMetricsProxy:
                     )
                     if body:
                         req_obj.add_header("Content-Length", str(len(body)))
-                    with urllib.request.urlopen(req_obj, timeout=INFERENCE_TIMEOUT_S) as r:
+                    with _NO_PROXY_OPENER.open(req_obj, timeout=INFERENCE_TIMEOUT_S) as r:
                         resp_body = r.read()
                         status = r.status
                     self._send_json(status, resp_body)
