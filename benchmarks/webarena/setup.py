@@ -839,15 +839,62 @@ def generate_test_data_and_login(host: str, venv_path: str,
         run(f"docker exec shopping_admin {_cmd}", dry_run=dry_run)
     log("Magento admin settings applied", "ok")
 
+    # Wait for the login-dependent services to actually be reachable BEFORE
+    # attempting auto-login. Magento admin (shopping_admin) can take 15s+ to
+    # come up after the config/cache-flush commands above — if auto_login.py
+    # runs while it's still warming up, Playwright's login navigation fails.
+    # CRITICAL: auto_login.py swallows those failures silently (upstream bug:
+    # it submits renew_comb() to a ThreadPoolExecutor and never calls
+    # .result() on those futures, so exceptions never surface) and exits 0
+    # with ZERO cookie files written — looks like success but isn't.
+    log("Waiting for Shopping/ShopAdmin/Forum to be ready before auto-login...", "info")
+    validate_services(host, include_gitlab, dry_run,
+                       label="Step 8.5: Pre-Login Service Readiness Check")
+
+    # Patch auto_login.py's default 30s Playwright timeout — too short for
+    # Magento admin login on bare-metal (matches run.py's Patch 4, applied
+    # here too since run.py's patches don't run until the FIRST benchmark
+    # run, which is after this setup step).
+    auto_login_file = WORKDIR / "browser_env" / "auto_login.py"
+    if not dry_run and auto_login_file.exists():
+        _content = auto_login_file.read_text()
+        _old_line = "    page = context.new_page()"
+        _new_line = ("    page = context.new_page()\n"
+                     "    page.set_default_timeout(90000)  # CWF: Magento admin is slow on bare-metal")
+        if _old_line in _content and "set_default_timeout" not in _content:
+            auto_login_file.write_text(_content.replace(_old_line, _new_line))
+            log("Patched auto_login.py: Playwright timeout 30s → 90s", "ok")
+
     log("Generating auto-login cookies (Playwright → .auth/)...", "info")
     if not dry_run:
-        (WORKDIR / ".auth").mkdir(parents=True, exist_ok=True)
+        auth_dir = WORKDIR / ".auth"
+        auth_dir.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [python, "browser_env/auto_login.py"],
             cwd=workdir, env=env
         )
-        if result.returncode == 0:
-            log("Auto-login cookies generated", "ok")
+        cookie_files = list(auth_dir.glob("*.json"))
+        if result.returncode == 0 and cookie_files:
+            log(f"Auto-login cookies generated ({len(cookie_files)} files)", "ok")
+        elif result.returncode == 0 and not cookie_files:
+            # auto_login.py exits 0 even when every login silently failed (see
+            # comment above) — don't trust the exit code, trust the output.
+            log(f"Auto-login reported success but wrote NO cookie files to {auth_dir}. "
+                "Most WebArena tasks require these to be logged in — retrying once "
+                "after a short wait...", "error")
+            time.sleep(20)
+            result2 = subprocess.run(
+                [python, "browser_env/auto_login.py"],
+                cwd=workdir, env=env
+            )
+            cookie_files = list(auth_dir.glob("*.json"))
+            if cookie_files:
+                log(f"Retry succeeded: {len(cookie_files)} cookie files generated", "ok")
+            else:
+                log(f"Auto-login STILL produced no cookie files after retry. "
+                    f"Check manually: docker logs shopping_admin --tail 50 ; "
+                    f"source ~/.cwf_webarena_env && {python} {workdir}/browser_env/auto_login.py",
+                    "error")
         else:
             log("Auto-login partially failed (GitLab down is expected if skipped)", "warn")
 
@@ -882,8 +929,9 @@ def generate_test_data_and_login(host: str, venv_path: str,
 
 # ── Step 10: Validation ───────────────────────────────────────────────────────
 
-def validate_services(host: str, include_gitlab: bool, dry_run: bool) -> bool:
-    banner("Step 10: Service Health Check")
+def validate_services(host: str, include_gitlab: bool, dry_run: bool,
+                       label: str = "Step 10: Service Health Check") -> bool:
+    banner(label)
 
     if dry_run:
         log("[dry-run] Would validate all services", "info")
