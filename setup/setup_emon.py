@@ -262,56 +262,35 @@ def download_sep(version: str, dry_run: bool) -> Path:
     if dry_run:
         return dest
 
-    # ubit-artifactory-or.intel.com is an Intel-internal host. On true
-    # intranet-connected lab benches it's reachable directly (--no-proxy).
-    # But some lab/cloud hosts only reach Intel-internal networks THROUGH the
-    # corp web proxy — direct access then fails DNS resolution entirely
-    # ("Name or service not known"). So try both direct and proxied for each
-    # tool, and VALIDATE the result every time instead of trusting exit code
-    # (a failed download can still leave a truncated/empty/HTML file behind).
-    #
-    # CRITICAL: every attempt is bounded to a short, fast-fail timeout. When
-    # Artifactory itself is down it returns 504 Gateway Timeout, and wget/curl
-    # will otherwise retry with growing backoff for MANY MINUTES before giving
-    # up — that previously stalled the whole setup until someone hit Ctrl+C.
-    # A hard per-attempt timeout (both via tool flags AND subprocess timeout=
-    # as a belt-and-suspenders backstop) guarantees we reach the local
-    # assets/installers/ fallback quickly instead of hanging.
-    ATTEMPT_TIMEOUT_S = 25
-    attempts = []
+    # ubit-artifactory-or.intel.com is an Intel-internal host that can be
+    # DOWN (returns 504 Gateway Timeout) or unreachable (DNS failure) from
+    # this host. Per requirement: make exactly ONE attempt with a hard 10s
+    # timeout — if it doesn't succeed immediately, fall back to the SEP
+    # installer staged under assets/installers/ right away instead of
+    # retrying or trying multiple direct/proxy/tool variations.
+    ATTEMPT_TIMEOUT_S = 10
     if shutil.which("wget"):
-        attempts.append(("wget (direct)",
-                          f"wget --no-proxy --no-check-certificate -c --tries=1 --timeout=10 "
-                          f"--progress=bar:force -O {dest} '{url}'"))
-        attempts.append(("wget (via proxy)",
-                          f"wget --no-check-certificate -c --tries=1 --timeout=10 "
-                          f"--progress=bar:force -O {dest} '{url}'"))
-    if shutil.which("curl"):
-        attempts.append(("curl (direct)",
-                          f"curl --noproxy '*' -k -L --connect-timeout 10 --max-time 20 "
-                          f"--retry 0 --continue-at - -o {dest} '{url}'"))
-        attempts.append(("curl (via proxy)",
-                          f"curl -k -L --connect-timeout 10 --max-time 20 "
-                          f"--retry 0 --continue-at - -o {dest} '{url}'"))
-
-    if not attempts:
+        cmd = (f"wget --no-check-certificate --tries=1 --timeout={ATTEMPT_TIMEOUT_S} "
+               f"--progress=bar:force -O {dest} '{url}'")
+    elif shutil.which("curl"):
+        cmd = (f"curl -k -L --connect-timeout {ATTEMPT_TIMEOUT_S} "
+               f"--max-time {ATTEMPT_TIMEOUT_S} --retry 0 -o {dest} '{url}'")
+    else:
         print("[ERROR] wget or curl required to download SEP", file=sys.stderr)
         sys.exit(1)
 
-    for label, cmd in attempts:
-        print(f"[INFO] Attempt: {label} (max {ATTEMPT_TIMEOUT_S}s)")
-        _run(cmd, dry_run=False, timeout=ATTEMPT_TIMEOUT_S)
-        if _is_valid_tar_bz2(dest):
-            print(f"[ OK ] Downloaded valid SEP archive via {label}")
-            return dest
-        print(f"[WARN] {label} did not produce a valid tar.bz2 — trying next method.")
-        dest.unlink(missing_ok=True)
+    print(f"[INFO] Attempt: Artifactory download (max {ATTEMPT_TIMEOUT_S}s, single try)")
+    _run(cmd, dry_run=False, timeout=ATTEMPT_TIMEOUT_S + 5)
+    if _is_valid_tar_bz2(dest):
+        print(f"[ OK ] Downloaded valid SEP archive from Artifactory")
+        return dest
 
-    print(f"[WARN] All download attempts from Artifactory failed (unreachable or down): {url}",
+    dest.unlink(missing_ok=True)
+    print(f"[WARN] Artifactory download failed/timed out (down or unreachable): {url}",
           file=sys.stderr)
     fallback = _find_fallback_sep_asset()
     if fallback:
-        print(f"[WARN] Falling back to locally staged SEP installer: {fallback}", file=sys.stderr)
+        print(f"[WARN] Using locally staged SEP installer instead: {fallback}", file=sys.stderr)
         if fallback.name != filename:
             print(f"[WARN] NOTE: this is a DIFFERENT SEP version than requested "
                   f"({filename}) — proceeding anyway since Artifactory is unreachable.",
