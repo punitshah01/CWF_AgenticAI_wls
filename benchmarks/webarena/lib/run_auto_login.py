@@ -10,9 +10,14 @@ network error, etc.) is silently discarded — the script exits 0 with ZERO
 cookie files written, and callers have no way to know what actually failed.
 
 This script imports the upstream module directly and re-runs the same login
-logic sequentially (not threaded), printing the real exception for every
-site/pair that fails, and exits non-zero only if EVERY login failed (partial
-cookies are still useful — WebArena tasks are scoped per-site).
+logic, but with .result() actually checked so real errors surface. Each
+renew_comb() call gets its OWN thread (matching upstream's design) rather
+than running sequentially in-process — renew_comb() has no try/finally
+around its sync_playwright() context manager, so if one call raises before
+reaching context_manager.__exit__(), it leaves that THREAD's Playwright
+driver/event-loop in a broken state ("Sync API inside the asyncio loop") —
+running strictly sequentially in a single thread lets one failure poison
+every subsequent attempt. A fresh thread per call avoids that.
 
 Usage (must run with cwd = the WebArena repo clone, same env vars as
 browser_env/auto_login.py expects — SHOPPING, SHOPPING_ADMIN, REDDIT, GITLAB):
@@ -20,12 +25,22 @@ browser_env/auto_login.py expects — SHOPPING, SHOPPING_ADMIN, REDDIT, GITLAB):
 """
 import sys
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
 from pathlib import Path
 
 sys.path.insert(0, ".")
 
 from browser_env.auto_login import SITES, renew_comb  # noqa: E402
+
+
+def _run_one(comb):
+    """Run renew_comb in a dedicated thread and return (comb, exc_or_None)."""
+    try:
+        renew_comb(comb, auth_folder="./.auth")
+        return comb, None
+    except Exception as e:  # noqa: BLE001 — must catch everything to report it
+        return comb, e
 
 
 def main() -> int:
@@ -43,16 +58,21 @@ def main() -> int:
         jobs.append([site])
 
     n_ok, n_fail = 0, 0
-    for comb in jobs:
-        label = "+".join(comb)
-        try:
-            renew_comb(comb, auth_folder=auth_folder)
-            print(f"[run_auto_login] OK   {label}")
-            n_ok += 1
-        except Exception as e:
-            print(f"[run_auto_login] FAIL {label}: {type(e).__name__}: {e}")
-            traceback.print_exc()
-            n_fail += 1
+    # One thread per job (not a shared pool reused across calls) so a
+    # poisoned Playwright event-loop state from a failed attempt can never
+    # leak into the next job's thread.
+    with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        futures = [executor.submit(_run_one, comb) for comb in jobs]
+        for future in futures:
+            comb, exc = future.result()
+            label = "+".join(comb)
+            if exc is None:
+                print(f"[run_auto_login] OK   {label}")
+                n_ok += 1
+            else:
+                print(f"[run_auto_login] FAIL {label}: {type(exc).__name__}: {exc}")
+                traceback.print_exception(type(exc), exc, exc.__traceback__)
+                n_fail += 1
 
     print(f"[run_auto_login] {n_ok} succeeded, {n_fail} failed out of {len(jobs)}")
     return 0 if n_ok > 0 else 1

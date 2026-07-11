@@ -799,6 +799,13 @@ def generate_test_data_and_login(host: str, venv_path: str,
     )
     env["HOMEPAGE"] = "PASS"
 
+    # CRITICAL: Chromium was installed to this custom path in Step 3
+    # (setup_python_env), not the Playwright default ~/.cache/ms-playwright/.
+    # Without this, auto_login.py's `playwright.chromium.launch()` fails with
+    # "Executable doesn't exist at ~/.cache/ms-playwright/..." even though the
+    # browser IS installed — it's just looking in the wrong place.
+    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".playwright-browsers"))
+
     # CRITICAL: Bypass Intel corporate proxy for Playwright (Chromium).
     # The Intel proxy blocks requests to internal IPs (e.g. 10.x.x.x) with
     # HTTP 403 "Access Denied — proxy policy restriction".
