@@ -777,6 +777,51 @@ def setup_ollama(model: str, dry_run: bool) -> None:
     log(f"Ollama ready with model: {final_model}", "ok")
 
 
+# ── Step 8.7: Pre-fetch tiktoken encoding (needs network, do it once here) ──
+
+TIKTOKEN_CACHE_DIR = Path.home() / ".cache" / "cwf_tiktoken"
+
+
+def prefetch_tiktoken_encoding(venv_path: str, dry_run: bool) -> None:
+    """Download+cache tiktoken's cl100k_base encoding file ONCE, here, where
+    proxy issues are visible and diagnosable — not silently at task runtime.
+
+    tiktoken.get_encoding("cl100k_base") (used by WebArena's tokenizer fallback
+    for non-OpenAI model names, e.g. llama3.1:8b) downloads a ~2MB file from
+    openaipublic.blob.core.windows.net on first use. If the process invoking
+    run.py doesn't have a proxy configured in its shell (a recurring issue on
+    these lab hosts), that download hangs/times out mid-benchmark — after the
+    LLM/Docker services are already up — wasting the whole run.
+
+    Cached to a PERSISTENT directory (not tiktoken's tmp-dir default, which
+    can be wiped on reboot) and exported via TIKTOKEN_CACHE_DIR in
+    ~/.cwf_webarena_env so every future run reuses it with zero network need.
+    """
+    banner("Step 8.7: Pre-fetch tiktoken Encoding (cl100k_base)")
+
+    if dry_run:
+        log("[dry-run] Would pre-fetch tiktoken cl100k_base encoding", "info")
+        return
+
+    TIKTOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.update(get_proxy_env())
+    env["TIKTOKEN_CACHE_DIR"] = str(TIKTOKEN_CACHE_DIR)
+
+    python = str(Path(venv_path) / "bin" / "python")
+    result = subprocess.run(
+        [python, "-c", "import tiktoken; tiktoken.get_encoding('cl100k_base'); print('OK')"],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode == 0:
+        log(f"tiktoken cl100k_base cached at {TIKTOKEN_CACHE_DIR} (no network needed at runtime)", "ok")
+    else:
+        log("Could not pre-fetch tiktoken encoding (network/proxy issue) — "
+            "run.py will retry at task time and may hang/timeout if the proxy "
+            "still isn't configured in that shell.", "warn")
+        log(f"  {(result.stderr or '').strip().splitlines()[-1] if result.stderr else ''}", "warn")
+
+
 # ── Step 9: Generate Test Data + Auto-Login ───────────────────────────────────
 
 def generate_test_data_and_login(host: str, venv_path: str,
@@ -927,6 +972,10 @@ def generate_test_data_and_login(host: str, venv_path: str,
             f'export HOMEPAGE="PASS"\n'
             f'export OPENAI_API_KEY="dummy"\n'
             f'export OPENAI_API_BASE="http://localhost:11434/v1"\n'
+            f'# Persistent tiktoken encoding cache — pre-fetched in Step 8.7 so\n'
+            f'# run.py never needs network for tokenization (avoids mid-benchmark\n'
+            f'# hangs when this shell has no proxy configured).\n'
+            f'export TIKTOKEN_CACHE_DIR="{TIKTOKEN_CACHE_DIR}"\n'
             f'# Bypass Intel corporate proxy ONLY for WebArena local container IPs —\n'
             f'# APPEND to (never overwrite/unset) any existing proxy config, so this\n'
             f'# does not break git/pip/curl to external hosts in your shell. Sourcing\n'
@@ -1139,6 +1188,10 @@ def main() -> None:
     # Step 8: Ollama LLM
     if not args.skip_ollama:
         setup_ollama(args.model, args.dry_run)
+
+    # Step 8.7: Pre-fetch tiktoken encoding (needs network — do it here, not
+    # silently mid-benchmark run where a proxy-less shell would hang/timeout)
+    prefetch_tiktoken_encoding(venv_path, args.dry_run)
 
     # Step 9: Generate test data + auto-login
     generate_test_data_and_login(host, venv_path, args.include_gitlab, args.dry_run)
