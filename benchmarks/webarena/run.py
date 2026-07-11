@@ -588,6 +588,7 @@ def _run_with_task_tracking(
     on_config: Optional[Callable[[int], None]] = None,
     on_intent: Optional[Callable[[int], None]] = None,
     on_result: Optional[Callable[[int, str], None]] = None,
+    on_task_done: Optional[Callable[[Dict], None]] = None,
 ) -> tuple:
     """Run the WebArena evaluation subprocess with per-task tracking.
 
@@ -606,6 +607,12 @@ def _run_with_task_tracking(
         on_config(idx)           — when [Config file] for task idx is seen
         on_intent(idx)           — when [Intent]: is seen for current task
         on_result(idx, result)   — when task finishes; result is PASS/FAIL/ERROR
+        on_task_done(task_record) — when the task's KPI record is finalised
+                                     (fires right after it's appended to
+                                     per_task_results — used for live/incremental
+                                     result writing so long multi-hour runs don't
+                                     lose all progress if interrupted before the
+                                     final end-of-run write).
 
     Returns (per_task_results, exit_code).
     per_task_results: list of dicts with task_idx, intent, result,
@@ -665,6 +672,12 @@ def _run_with_task_tracking(
             **agg,
         }
         per_task_results.append(task_record)
+        if on_task_done is not None:
+            try:
+                on_task_done(task_record)
+            except Exception as _e:
+                print(f"[task-tracking] WARN: on_task_done callback failed: {_e}",
+                      file=sys.stderr)
 
         # Write per-task output folder
         task_dir = out_dir / "tasks" / f"task_{idx}"
@@ -736,6 +749,7 @@ def _run_with_per_task_emon(
     sep_dir: str = "/opt/intel/sep",
     start_delay_s: float = 2.0,
     proxy: Optional["OllamaMetricsProxy"] = None,
+    on_task_row: Optional[Callable[[Dict, Dict[str, Tuple[str, str]]], None]] = None,
 ) -> tuple:
     """Run WebArena with per-task EMON collection and task tracking.
 
@@ -745,13 +759,22 @@ def _run_with_per_task_emon(
     Each task's raw EMON data is saved to:
         <out_dir>/telemetry/task_<N>/emon_task_<N>.txt
 
+    on_task_row(task_record, views) fires once a task's KPI record AND its
+    EMON views (if any) are both ready — i.e. after that task's background
+    EDP post-processing finishes — so callers can persist results LIVE,
+    task by task, instead of only at the very end of a possibly multi-hour
+    full-suite run (which loses everything if the run is interrupted early).
+
     Returns (per_task_results, exit_code).
     """
     import threading
 
-    _current_emon: list = [None]   # EmonCollector in flight
-    _pending_timer: list = [None]  # threading.Timer for delayed start (cancelable)
-    _edp_threads: list = []        # background EDP post-processing threads
+    _current_emon: list = [None]      # EmonCollector in flight
+    _current_emon_idx: list = [None]  # task_idx the in-flight EmonCollector belongs to
+    _pending_timer: list = [None]     # threading.Timer for delayed start (cancelable)
+    _edp_threads: list = []           # background EDP post-processing threads
+    _task_record_cache: Dict[int, Dict] = {}  # task_idx -> KPI record, filled by on_task_done
+    _last_stop_had_emon: list = [False]  # did the most recent _stop_and_process_emon() actually stop anything?
 
     def _cancel_timer() -> None:
         t = _pending_timer[0]
@@ -763,18 +786,32 @@ def _run_with_per_task_emon(
         """Stop the current EMON collector and kick off EDP post-processing in background."""
         ec = _current_emon[0]
         if ec is None:
+            _last_stop_had_emon[0] = False
             return
+        _last_stop_had_emon[0] = True
+        idx = _current_emon_idx[0]
         _current_emon[0] = None
+        _current_emon_idx[0] = None
         ec.stop_collection()
 
         # Fire EDP post-processing in a daemon thread so the next task is not blocked.
         def _edp():
             print(f"[per-task-emon] Post-processing {ec.output_file} (processing all collected samples)…")
             result = ec.process_emon_with_edp()
+            views: Dict[str, Tuple[str, str]] = {}
             if result:
                 print(f"[per-task-emon] EDP done → {result}")
+                views = _read_task_emon_views(result)
             else:
                 print(f"[per-task-emon] EDP failed for {ec.output_file}")
+            if on_task_row is not None and idx is not None:
+                rec = _task_record_cache.pop(idx, None)
+                if rec is not None:
+                    try:
+                        on_task_row(rec, views)
+                    except Exception as _e:
+                        print(f"[per-task-emon] WARN: on_task_row callback failed: {_e}",
+                              file=sys.stderr)
 
         t = threading.Thread(target=_edp, daemon=True)
         t.start()
@@ -786,6 +823,7 @@ def _run_with_per_task_emon(
         ec = EmonCollector(sep_dir=sep_dir, output_dir=str(task_dir))
         if ec.start_collection(session_name=f"emon_task_{idx}", duration_s=None):
             _current_emon[0] = ec
+            _current_emon_idx[0] = idx
         else:
             print(f"[per-task-emon] WARNING: EMON start failed for task {idx}")
 
@@ -807,12 +845,27 @@ def _run_with_per_task_emon(
         _cancel_timer()
         _stop_and_process_emon()
 
+    def _on_task_done(rec: Dict) -> None:
+        """Cache the KPI record if EMON is pending EDP for this task (on_task_row
+        fires later, once EDP finishes); otherwise flush immediately with empty
+        views — e.g. tasks that failed before [Intent] or never had EMON started
+        (fast-failing GitLab tasks) would otherwise sit in the cache forever."""
+        if _last_stop_had_emon[0]:
+            _task_record_cache[rec["task_idx"]] = rec
+        elif on_task_row is not None:
+            try:
+                on_task_row(rec, {})
+            except Exception as _e:
+                print(f"[per-task-emon] WARN: on_task_row callback failed: {_e}",
+                      file=sys.stderr)
+
     per_task_results, rc = _run_with_task_tracking(
         cmd=cmd, cwd=cwd, env=env, out_dir=out_dir,
         proxy=proxy,
         on_config=_on_config,
         on_intent=_on_intent,
         on_result=_on_result,
+        on_task_done=_on_task_done,
     )
 
     # Wait for all background EDP post-processing threads before returning.
@@ -827,8 +880,15 @@ def _run_with_per_task_emon(
 
 def run_evaluation(args: argparse.Namespace, run_id: str,
                    proxy_port: Optional[int] = None,
-                   proxy: Optional["OllamaMetricsProxy"] = None) -> dict:
-    """Invoke WebArena run.py. Returns result dict."""
+                   proxy: Optional["OllamaMetricsProxy"] = None,
+                   on_task_row: Optional[Callable[[Dict, Dict[str, Tuple[str, str]]], None]] = None) -> dict:
+    """Invoke WebArena run.py. Returns result dict.
+
+    on_task_row(task_record, views), if given, fires once per task as soon as
+    that task's KPI record (and EMON views, if --emon is active) are ready —
+    lets callers persist results LIVE instead of only at the very end of a
+    possibly multi-hour full-suite run.
+    """
     # Always apply patches to the WebArena clone before running — idempotent.
     _ensure_webarena_patched()
 
@@ -993,6 +1053,7 @@ def run_evaluation(args: argparse.Namespace, run_id: str,
             out_dir=repo_out_dir,
             sep_dir="/opt/intel/sep",
             proxy=proxy,
+            on_task_row=on_task_row,
         )
     else:
         per_task_results, run_rc = _run_with_task_tracking(
@@ -1001,6 +1062,7 @@ def run_evaluation(args: argparse.Namespace, run_id: str,
             env=env,
             out_dir=repo_out_dir,
             proxy=proxy,
+            on_task_done=(lambda rec: on_task_row(rec, {})) if on_task_row is not None else None,
         )
     if run_rc != 0:
         print(f"[ERROR] WebArena evaluation command failed with exit code {run_rc}", file=sys.stderr)
@@ -1143,7 +1205,58 @@ def main() -> None:
         if not args.dry_run:
             tm.start(session_name=run_id)
 
-        bench_results = run_evaluation(args, run_id, proxy_port=proxy_port, proxy=_proxy)
+        # ── Live per-task result writer ─────────────────────────────────────
+        # Persists each task's row to *_live.csv files AS IT COMPLETES, so a
+        # long full-suite run (hours) doesn't lose all progress if interrupted
+        # (e.g. Ctrl+C) before the final end-of-run summary.csv write below.
+        _live_kpi_header = [
+            "task_idx", "intent", "result", "runtime_s",
+            "num_requests", "prompt_tokens", "completion_tokens",
+            "avg_prompt_eval_tok_s", "avg_gen_tok_s", "avg_ttft_ms",
+        ]
+        _live_run_level: "OrderedDict[str, str]" = OrderedDict()
+        _live_run_level["session"]  = args.session or run_id
+        _live_run_level["run_id"]   = run_id
+        _live_run_level["model"]    = model_label
+        _live_run_level["platform"] = platform
+        for _k, _v in sys_meta.items():
+            _live_run_level[_k] = _v
+
+        def _on_task_row(task_record: Dict, views: Dict[str, Tuple[str, str]]) -> None:
+            _kpi_row = [
+                str(task_record.get("task_idx",              "")),
+                str(task_record.get("intent",                "")),
+                str(task_record.get("result",                "")),
+                str(task_record.get("runtime_s",             "")),
+                str(task_record.get("num_requests",          "")),
+                str(task_record.get("prompt_tokens",         "")),
+                str(task_record.get("completion_tokens",     "")),
+                str(task_record.get("avg_prompt_eval_tok_s", "")),
+                str(task_record.get("avg_gen_tok_s",         "")),
+                str(task_record.get("avg_ttft_ms",           "")),
+            ]
+            _rl_vals = [str(v) for v in _live_run_level.values()]
+            write_csv_row(out_dir / "per_task_results_live.csv",
+                          _live_kpi_header, _kpi_row, verbose=False)
+
+            for _vname, _fname in (
+                ("system", "summary_live.csv"),
+                ("socket", "summary_socket_live.csv"),
+                ("core",   "summary_core_live.csv"),
+                ("uncore", "summary_uncore_live.csv"),
+            ):
+                if _vname not in views:
+                    continue
+                _vheader, _vvals = views[_vname]
+                _header = (_live_kpi_header + list(_live_run_level.keys())
+                           + [f"emon_{_vname}_{c.strip()}" for c in _vheader.split(",")])
+                _row = _kpi_row + _rl_vals + _vvals.split(",")
+                write_csv_row(out_dir / _fname, _header, _row, verbose=False)
+            print(f"[webarena] live row written for task {task_record.get('task_idx')} "
+                  f"(views={','.join(views.keys()) or 'none'})")
+
+        bench_results = run_evaluation(args, run_id, proxy_port=proxy_port, proxy=_proxy,
+                                        on_task_row=_on_task_row)
 
         if not args.dry_run:
             print("\n[telemetry] Stopping collectors and processing EMON...")
