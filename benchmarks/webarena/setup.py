@@ -280,22 +280,42 @@ def setup_python_env(dry_run: bool) -> str:
 
     venv_path = Path.home() / "webarena_venv"
 
-    # Find Python 3.10+
+    # Find Python 3.10/3.11 — deliberately NOT 3.12+. playwright==1.32.1 (pinned
+    # below for WebArena compatibility) pulls in an old greenlet release that
+    # has no prebuilt wheel for cp312 and fails to build from source (CPython
+    # 3.12 removed/renamed several PyThreadState/_PyCFrame internals greenlet
+    # relies on: use_tracing, recursion_limit, trash_delete_nesting, ...).
     python_bin = None
-    for candidate in ("python3.11", "python3.10", "python3"):
+    for candidate in ("python3.11", "python3.10"):
         if shutil.which(candidate):
-            # Verify version
-            ver = run_capture(f"{candidate} --version")
-            if "3.10" in ver or "3.11" in ver or "3.12" in ver:
-                python_bin = candidate
-                break
+            python_bin = candidate
+            break
+
+    # Ubuntu 24.04 (noble) ships only python3.12 by default and doesn't carry
+    # python3.11 in the standard repos — but scripts/setup.py already created
+    # a conda env named 'agentic' with Python 3.11 for the common infra. Reuse
+    # that interpreter rather than depending on an apt package that may not
+    # exist on this distro.
+    if python_bin is None:
+        conda_py311 = Path.home() / "miniconda3" / "envs" / "agentic" / "bin" / "python3.11"
+        if conda_py311.exists():
+            python_bin = str(conda_py311)
+            log(f"No system python3.10/3.11 — reusing conda env's interpreter: {python_bin}", "info")
 
     if python_bin is None:
-        log("No Python 3.10+ found. Installing python3.11...", "info")
+        log("No Python 3.10/3.11 found. Attempting to install python3.11 ...", "info")
         run("dnf install -y python3.11 python3.11-devel 2>/dev/null || "
-            "apt-get install -y python3.11 python3.11-dev",
+            "apt-get install -y python3.11 python3.11-dev 2>/dev/null || true",
             dry_run=dry_run)
-        python_bin = "python3.11"
+        if shutil.which("python3.11") or dry_run:
+            python_bin = "python3.11"
+        else:
+            log("python3.11 is not installable on this OS (e.g. Ubuntu 24.04 has no "
+                "python3.11 apt package) — falling back to system python3. "
+                "playwright==1.32.1's greenlet dependency WILL FAIL to build on "
+                "Python 3.12+; if this happens, install python3.11 via conda/pyenv/deadsnakes "
+                "and rerun.", "warn")
+            python_bin = "python3"
 
     # Ensure the matching venv/ensurepip package is installed FIRST.
     # `python3 -m venv` silently creates a BROKEN environment (no pip, no
@@ -307,6 +327,18 @@ def setup_python_env(dry_run: bool) -> str:
     venv_pkg = f"python3.{m.group(2)}-venv" if m else "python3-venv"
     run(f"apt-get install -y {venv_pkg} python3-venv 2>/dev/null || "
         f"dnf install -y {venv_pkg} 2>/dev/null || true", dry_run=dry_run)
+
+    # If a venv already exists from a PREVIOUS run that picked an incompatible
+    # interpreter (e.g. system python3.12, before this fix), wipe and recreate
+    # it — otherwise we'd silently keep reusing the broken 3.12 venv forever.
+    existing_py = venv_path / "bin" / "python3"
+    if existing_py.exists() and not dry_run:
+        existing_ver = run_capture(f"{existing_py} --version") or ""
+        em = _re.search(r"(\d+)\.(\d+)", existing_ver)
+        if em and (int(em.group(1)), int(em.group(2))) >= (3, 12):
+            log(f"Existing venv at {venv_path} uses Python {em.group(0)} "
+                "(incompatible with pinned playwright/greenlet) — recreating ...", "warn")
+            run(f"rm -rf {venv_path}", dry_run=dry_run)
 
     if not venv_path.exists() or dry_run:
         run(f"{python_bin} -m venv {venv_path}", dry_run=dry_run)
