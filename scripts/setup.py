@@ -348,6 +348,38 @@ def install_docker(os_info: Dict[str, str], dry_run: bool) -> None:
 # Step 3: Conda environment
 # ---------------------------------------------------------------------------
 
+def _is_valid_shell_installer(path: str) -> bool:
+    """Return True if `path` looks like a real shell installer, not an HTML
+    error/block page (e.g. corp proxy block pages, expired-link landing pages).
+    """
+    try:
+        with open(path, "rb") as _fh:
+            head = _fh.read(512)
+    except OSError:
+        return False
+    if not head.startswith(b"#!"):
+        return False
+    if b"<!DOCTYPE" in head[:64] or b"<html" in head[:64].lower():
+        return False
+    return True
+
+
+def _download_file(url: str, dest: str, dry_run: bool) -> bool:
+    """Try wget then curl to fetch `url` into `dest`; validate it's a real
+    shell script afterwards (not a proxy/CDN HTML block page). Returns True
+    on a validated download.
+    """
+    if shutil.which("wget"):
+        run(f"wget --no-check-certificate -q {url} -O {dest}", dry_run=dry_run, check=False)
+        if dry_run or _is_valid_shell_installer(dest):
+            return True
+    if shutil.which("curl"):
+        run(f"curl -k -L -f {url} -o {dest}", dry_run=dry_run, check=False)
+        if dry_run or _is_valid_shell_installer(dest):
+            return True
+    return False
+
+
 def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
     banner(f"Step 3: Conda Environment  [{conda_env}, Python {python_version}]")
 
@@ -359,26 +391,34 @@ def setup_conda(conda_env: str, python_version: str, dry_run: bool) -> None:
             installer = str(cached)
             log(f"Using cached installer: {cached}", "ok")
         else:
-            # NOTE: this is a PUBLIC internet URL, not an internal Intel host —
-            # unlike Artifactory downloads it must go THROUGH the corp proxy
-            # (if one is configured via HTTP_PROXY/HTTPS_PROXY env vars), so
-            # we deliberately do NOT disable proxying here. --no-check-certificate
+            # NOTE: these are PUBLIC internet URLs, not internal Intel hosts —
+            # unlike Artifactory downloads they must go THROUGH the corp proxy
+            # (if one is configured via HTTP_PROXY/HTTPS_PROXY env vars), so we
+            # deliberately do NOT disable proxying here. --no-check-certificate
             # / -k only bypass corp SSL-inspection certs, they don't touch proxying.
-            miniconda_url = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
-            run(f"wget --no-check-certificate -q {miniconda_url} -O {installer}",
-                dry_run=dry_run, check=False)
-            # Validate: miniconda script must start with '#!/'
-            if not dry_run:
-                try:
-                    with open(installer, "rb") as _fh:
-                        magic = _fh.read(3)
-                    if magic != b"#!/":
-                        log(f"Downloaded miniconda installer looks invalid (got {magic!r}) — "
-                            "check network/proxy. Trying curl as fallback.", "warn")
-                        run(f"curl -k -L {miniconda_url} -o {installer}",
-                            dry_run=False, check=False)
-                except OSError:
-                    pass
+            #
+            # Miniforge (GitHub-hosted, BSD-licensed conda-forge installer) is
+            # tried FIRST: many corp networks (incl. Intel) block/redirect
+            # repo.anaconda.com to an HTML page because of Anaconda's 2020
+            # commercial-use ToS change. GitHub is already known-reachable
+            # here (used for the TMC client clone below).
+            candidate_urls = [
+                "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh",
+                "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh",
+            ]
+            downloaded = False
+            for url in candidate_urls:
+                log(f"Trying installer source: {url}", "info")
+                if _download_file(url, installer, dry_run):
+                    downloaded = True
+                    break
+                log(f"Download from {url} did not yield a valid shell script "
+                    "(likely blocked/redirected by proxy) — trying next source.", "warn")
+            if not downloaded and not dry_run:
+                log("All conda installer download sources failed.", "error")
+                log(f"Pre-download an installer to {MINICONDA_LOCAL} and rerun, "
+                    "or run with --skip-conda.", "error")
+                sys.exit(1)
         run(f"bash {installer} -b -p {Path.home()}/miniconda3",
             dry_run=dry_run, check=False)
         # Update PATH immediately so all subsequent conda calls in this process work
