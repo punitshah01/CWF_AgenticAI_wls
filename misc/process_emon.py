@@ -37,7 +37,9 @@ def main() -> None:
     parser.add_argument("--dirty", type=int, default=400,
                         help="Dirty samples to skip at end (default: 400)")
     parser.add_argument("--views", nargs="+",
-                        default=["system-view", "socket-view", "core-view", "uncore-view"],
+                        # No "--system-view" flag exists in mpp.py — system view is
+                        # emitted by default with no flag at all.
+                        default=["socket-view", "core-view", "uncore-view"],
                         help="EDP views to generate")
     args = parser.parse_args()
 

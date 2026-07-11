@@ -274,7 +274,11 @@ class EmonCollector:
         begin_sample: int = DEFAULT_BEGIN_SAMPLE,
         dirty_samples: int = DEFAULT_DIRTY_SAMPLES,
         target_samples: int = 600,
-        views: Tuple[str, ...] = ("system-view", "socket-view", "core-view", "uncore-view"),
+        # NOTE: mpp.py has no "--system-view" flag — the system view CSV is
+        # always emitted by default with no flag at all. Passing an unknown
+        # flag (e.g. --system-view) makes mpp.py's argparse reject ALL views,
+        # failing EDP entirely ("unrecognized arguments: --system-view").
+        views: Tuple[str, ...] = ("socket-view", "core-view", "uncore-view"),
         parallel_threads: Optional[int] = None,
         archive_raw: bool = True,
     ) -> Optional[Path]:

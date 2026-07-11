@@ -212,7 +212,9 @@ class TelemetryManager:
                         except Exception:
                             pass
 
-                _views = views or ("system-view", "socket-view", "core-view", "uncore-view")
+                # No "--system-view" flag exists in mpp.py — system view is emitted
+                # by default with no flag; passing it makes mpp.py reject all views.
+                _views = views or ("socket-view", "core-view", "uncore-view")
                 self.emon_output_dir = self.emon.process_emon_with_edp(
                     platform=self.platform,
                     sockets=sockets,

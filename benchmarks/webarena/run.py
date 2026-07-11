@@ -816,8 +816,19 @@ def run_evaluation(args: argparse.Namespace, run_id: str,
     # blocks requests to internal IPs (10.x.x.x) with HTTP 403 "Access Denied".
     # We must unset all proxy vars and explicitly set NO_PROXY to cover all
     # local service IPs and ports used by WebArena containers.
-    for _pvar in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-        env.pop(_pvar, None)
+    #
+    # NOTE: urllib/requests (used by the legacy openai==0.27.0 SDK) scans
+    # os.environ for ANY key matching "*_proxy" (case-insensitive) via
+    # urllib.request.getproxies_environment() — not just the 4 well-known
+    # names. If a host's shell has ALL_PROXY (or any other proxy var) set
+    # (e.g. left over from troubleshooting `ollama pull` behind a corporate
+    # proxy), that alone is enough to route localhost:11434 calls through
+    # a proxy and get an HTTP 403 "incorrect proxy service was requested".
+    # Strip every "*_proxy"-style variable to be safe, then re-add only the
+    # explicit NO_PROXY we want.
+    for _pvar in list(env.keys()):
+        if _pvar.lower().endswith("_proxy"):
+            env.pop(_pvar, None)
     _local_no_proxy = "localhost,127.0.0.1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     env["NO_PROXY"]  = _local_no_proxy
     env["no_proxy"]  = _local_no_proxy
