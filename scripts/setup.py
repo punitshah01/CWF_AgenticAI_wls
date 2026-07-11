@@ -493,6 +493,13 @@ def setup_git_lfs(os_info: Dict[str, str], dry_run: bool) -> None:
         return
 
     run("git lfs install --system || git lfs install", dry_run=dry_run, check=False)
+
+    # Fetch actual content for any LFS-tracked files (e.g. assets/installers/
+    # backup SEP tarball) — if git-lfs wasn't installed at the time of the
+    # earlier `git pull`, those files are left as small text pointer stubs
+    # instead of the real binary, which silently breaks the EMON fallback.
+    repo_root = Path(__file__).resolve().parent.parent
+    run(f"git -C {repo_root} lfs pull", dry_run=dry_run, check=False)
     log("git-lfs ready", "ok")
 
 

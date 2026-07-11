@@ -216,6 +216,20 @@ def _is_valid_tar_bz2(path: Path) -> bool:
     return probe.returncode == 0
 
 
+def _is_unresolved_lfs_pointer(path: Path) -> bool:
+    """Return True if `path` is an un-smudged git-lfs pointer stub (a few
+    hundred bytes of text) rather than the actual binary — this happens when
+    git-lfs wasn't installed/initialized at clone/pull time on this host.
+    """
+    try:
+        if path.stat().st_size > 1024:
+            return False
+        head = path.read_bytes()[:200]
+        return head.startswith(b"version https://git-lfs.github.com/spec")
+    except OSError:
+        return False
+
+
 def _find_fallback_sep_asset() -> Optional[Path]:
     """Find any pre-staged SEP installer under assets/installers/ to use as a
     last-resort fallback when Artifactory is completely unreachable (e.g. down,
@@ -289,6 +303,24 @@ def download_sep(version: str, dry_run: bool) -> Path:
     print(f"[WARN] Artifactory download failed/timed out (down or unreachable): {url}",
           file=sys.stderr)
     fallback = _find_fallback_sep_asset()
+
+    # If no valid fallback was found, check whether it's stuck as an
+    # un-smudged git-lfs pointer (happens when git-lfs wasn't installed at
+    # clone/pull time on this host) and try to fix it automatically.
+    if not fallback:
+        installers_dir = REPO_ROOT / "assets" / "installers"
+        pointer_files = [p for p in installers_dir.glob("sep_private_*.tar.bz2")
+                          if _is_unresolved_lfs_pointer(p)] if installers_dir.exists() else []
+        if pointer_files:
+            print(f"[WARN] {pointer_files[0]} is an unresolved git-lfs pointer, not the real "
+                  "file — this host likely didn't have git-lfs installed during 'git pull'.",
+                  file=sys.stderr)
+            print("[INFO] Attempting to fetch it now: git lfs install && git lfs pull ...",
+                  file=sys.stderr)
+            _run("git -C " + str(REPO_ROOT) + " lfs install", dry_run=False, timeout=30)
+            _run("git -C " + str(REPO_ROOT) + " lfs pull", dry_run=False, timeout=120)
+            fallback = _find_fallback_sep_asset()
+
     if fallback:
         print(f"[WARN] Using locally staged SEP installer instead: {fallback}", file=sys.stderr)
         if fallback.name != filename:
@@ -302,9 +334,12 @@ def download_sep(version: str, dry_run: bool) -> Path:
           "Artifactory (ubit-artifactory-or.intel.com). Options:", file=sys.stderr)
     print("        1. Verify intranet/VPN connectivity and DNS resolution to "
           "ubit-artifactory-or.intel.com, then retry.", file=sys.stderr)
-    print(f"        2. Manually download a SEP installer and place it at "
+    print("        2. Run 'git lfs install && git lfs pull' to fetch the staged "
+          f"backup installer under {REPO_ROOT / 'assets' / 'installers'}/, then retry.",
+          file=sys.stderr)
+    print(f"        3. Manually download a SEP installer and place it at "
           f"{REPO_ROOT / 'assets' / 'installers'}/, then retry.", file=sys.stderr)
-    print(f"        3. Pass --sep-installer /path/to/sep_....tar.bz2 to skip the download.",
+    print(f"        4. Pass --sep-installer /path/to/sep_....tar.bz2 to skip the download.",
           file=sys.stderr)
     sys.exit(1)
 
