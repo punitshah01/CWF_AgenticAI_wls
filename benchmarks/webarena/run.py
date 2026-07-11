@@ -188,6 +188,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--emon",            action="store_true",
                     help="Collect a separate EMON file per task (start 2s after [Intent], stop at [Result]). "
                          "Saves to telemetry/task_N/emon_task_N.txt. Requires /opt/intel/sep.")
+    p.add_argument("--emon-target-samples", type=int, default=600, metavar="N",
+                    help="Per-task EMON (--emon only): number of samples EDP processes from the "
+                         "center of each task's collection. This is a SAMPLE COUNT, not a duration -- "
+                         "600 assumes CWF's coarse ~7.5s/sample interval (usually covers the whole "
+                         "collection there). On fast-sampling platforms (e.g. GNR at ~0.1s/sample), "
+                         "600 samples covers only ~60s of wall-clock time, which can hurt EDP's mux "
+                         "reliability%%. Raise this (e.g. 2000+) for a wider window on such platforms.")
     p.add_argument("--collect-emon",    action="store_true",
                     help="Global steady-state EMON: wait 180s warmup after workload starts, "
                          "collect for 300s, then post-process with EDP to generate Excel/CSV. "
@@ -685,6 +692,7 @@ def _run_with_per_task_emon(
     sep_dir: str = "/opt/intel/sep",
     start_delay_s: float = 2.0,
     proxy: Optional["OllamaMetricsProxy"] = None,
+    target_samples: int = 600,
 ) -> tuple:
     """Run WebArena with per-task EMON collection and task tracking.
 
@@ -702,8 +710,15 @@ def _run_with_per_task_emon(
     _pending_timer: list = [None]  # threading.Timer for delayed start (cancelable)
     _edp_threads: list = []        # background EDP post-processing threads
 
-    TARGET_SAMPLES = 600  # process up to 600 samples from the center of each task's collection;
-                           # if fewer than 600 were collected, process all of them
+    # NOTE: this is a fixed SAMPLE COUNT, not a fixed duration. The 600 default
+    # assumes CWF's coarse ~7.5s/sample EMON interval (600 samples ≈ 75 min,
+    # so in practice CWF almost always has fewer samples than this and the
+    # whole collection gets processed). On platforms with a much finer
+    # sampling interval (e.g. GNR at ~0.1s/sample), 600 samples covers only
+    # ~60s of wall-clock time — a small centered slice of the task's actual
+    # collection — which can hurt EDP's mux reliability%. Override via
+    # --emon-target-samples if you need a wider window on fast-sampling platforms.
+    TARGET_SAMPLES = target_samples
 
     def _cancel_timer() -> None:
         t = _pending_timer[0]
@@ -945,6 +960,7 @@ def run_evaluation(args: argparse.Namespace, run_id: str,
             out_dir=repo_out_dir,
             sep_dir="/opt/intel/sep",
             proxy=proxy,
+            target_samples=args.emon_target_samples,
         )
     else:
         per_task_results, run_rc = _run_with_task_tracking(
