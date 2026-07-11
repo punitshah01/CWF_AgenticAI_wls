@@ -173,6 +173,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--end-idx",         type=int, default=812)
     p.add_argument("--llm-port",        type=int, default=11434,
                     help="LLM API port (11434=Ollama, 8000=llama.cpp)")
+    p.add_argument("--ollama-num-thread", type=int, default=0, metavar="N",
+                    help="Force Ollama's CPU thread count via the per-request 'num_thread' "
+                         "API option (there is no OLLAMA_NUM_THREAD env var -- this is the "
+                         "only way to control it). 0 (default) lets Ollama pick its own "
+                         "default (usually physical core count). Only takes effect when "
+                         "the metrics proxy starts successfully. e.g. --ollama-num-thread 192 "
+                         "to test HT-doubled threading on a Hyperthreading-enabled host.")
     p.add_argument("--run-id",          default="")
     p.add_argument("--session",         default="", metavar="NAME",
                     help="Human-readable session/run label (e.g. 'baseline_qwen72b'). "
@@ -1001,13 +1008,22 @@ def main() -> None:
         _proxy = OllamaMetricsProxy(
             ollama_port=args.llm_port,
             proxy_port=_candidate_port,
+            num_thread=args.ollama_num_thread or None,
         )
         if _proxy.start():
             proxy_port = _candidate_port
             print(f"[ollama-proxy] Metrics proxy started on port {proxy_port} "
                   f"(forwarding → localhost:{args.llm_port})")
+            if args.ollama_num_thread:
+                print(f"[ollama-proxy] Forcing num_thread={args.ollama_num_thread} on every request")
         else:
             _proxy = None
+            if args.ollama_num_thread:
+                print(
+                    "[WARN] --ollama-num-thread requested but the metrics proxy failed to start — "
+                    "num_thread override will NOT be applied (requests go directly to Ollama).",
+                    file=sys.stderr,
+                )
 
     try:
         cpu = CPUInfo()

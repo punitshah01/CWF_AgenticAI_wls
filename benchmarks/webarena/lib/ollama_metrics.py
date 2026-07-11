@@ -68,9 +68,17 @@ class OllamaMetricsProxy:
     All other endpoints are forwarded transparently to Ollama.
     """
 
-    def __init__(self, ollama_port: int = 11434, proxy_port: int = 11435) -> None:
+    def __init__(self, ollama_port: int = 11434, proxy_port: int = 11435,
+                 num_thread: Optional[int] = None) -> None:
         self.ollama_port = ollama_port
         self.proxy_port = proxy_port
+        # NOTE: there is no "OLLAMA_NUM_THREAD" systemd/env var that Ollama
+        # reads -- CPU thread count is only controllable via the per-request
+        # "num_thread" option in the native /api/chat payload (or a Modelfile
+        # "PARAMETER num_thread N" baked into a model tag). When set, we
+        # inject it into every translated request below so --inference-cores
+        # actually has an effect on Ollama, not just on the eval subprocess.
+        self.num_thread = num_thread
         self._metrics: List[Dict] = []
         self._lock = threading.Lock()
         self._current_task_idx: Optional[int] = None
@@ -134,6 +142,10 @@ class OllamaMetricsProxy:
                 for k in ("top_p", "top_k", "seed"):
                     if k in req_data:
                         native_req["options"][k] = req_data[k]
+                # Force a specific CPU thread count if requested (see __init__
+                # note: this is the ONLY way to control Ollama's thread count).
+                if proxy.num_thread:
+                    native_req["options"]["num_thread"] = proxy.num_thread
                 if not native_req["options"]:
                     del native_req["options"]
 
