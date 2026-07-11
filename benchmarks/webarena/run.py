@@ -100,7 +100,7 @@ from common.system_metadata import get_system_metadata, get_ollama_metadata
 from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
-from common.telemetry.emon import EmonCollector, _read_emon_csv
+from common.telemetry.emon import EmonCollector
 from common.cli_utils import setup_tee_logging, teardown_logging
 from benchmarks.webarena.lib.ollama_metrics import OllamaMetricsProxy
 
@@ -495,24 +495,75 @@ def _preflight_ollama_model(args: argparse.Namespace, model_name: str) -> None:
     sys.exit(1)
 
 
+def _read_emon_metrics_csv(csv_path: Path) -> Tuple[str, str]:
+    """Read an EDP summary CSV in EITHER layout mpp.py has used:
+
+    - Wide format (older mpp.py, e.g. 5.14): row0 = comma-separated metric
+      names, row1 = comma-separated values.
+    - Long/transposed format (newer mpp.py, e.g. 5.19.0 from SEP 5.57):
+      row0 = a meta header like "(Metric post processor 5.19.0) name
+      (sample #1 - #N),aggregated"; every subsequent row is
+      "<metric_name>,<value>".
+
+    Always returns (header_csv, values_csv) in WIDE form (one column per
+    metric) so callers can merge it into summary.csv the same way regardless
+    of which mpp.py version produced the file.
+    """
+    import csv as _csv
+    try:
+        with open(csv_path, newline='') as f:
+            rows = [r for r in _csv.reader(f) if any(c.strip() for c in r)]
+    except Exception as exc:
+        print(f"[emon] CSV read error: {exc}")
+        return "", ""
+    if not rows:
+        return "", ""
+    if len(rows) == 2:
+        header, values = rows[0], rows[1]
+    else:
+        # Long/transposed format: skip the meta header row, take (name, value)
+        # from every remaining row.
+        header, values = [], []
+        for r in rows[1:]:
+            if len(r) < 2:
+                continue
+            header.append(r[0].strip())
+            values.append(r[1].strip())
+    formatted = []
+    for v in values:
+        try:
+            fv = float(v)
+            formatted.append(f"{fv:.5f}" if fv < 1 else f"{fv:.2f}")
+        except ValueError:
+            formatted.append(v)
+    return ",".join(header), ",".join(formatted)
+
+
 def _read_task_emon_views(emon_out_dir: Path) -> Dict[str, Tuple[str, str]]:
     """Read whichever system/socket/core/uncore EDP summary CSVs exist in
     *emon_out_dir* (the directory passed as EmonCollector.process_emon_with_edp's
-    ``-o`` basename is always ``processed``, so files are named
-    ``processed__mpp_<view>_view_summary.csv``).
+    ``-o`` basename is always ``processed``). Filename convention differs by
+    mpp.py version:
 
-    Returns {view_name: (header_csv_str, values_csv_str)} for whichever views
-    were actually produced — missing files are silently skipped.
+    - Older mpp.py (e.g. 5.14): ``processed__mpp_<view>_view_summary.csv``
+    - Newer mpp.py (e.g. 5.19.0 from SEP 5.57): ``processed_<view>_view_summary.csv``
+
+    Both are tried. Returns {view_name: (header_csv_str, values_csv_str)} for
+    whichever views were actually produced — missing files are silently skipped.
     """
     out: Dict[str, Tuple[str, str]] = {}
     if not emon_out_dir.exists():
         return out
     for view in ("system", "socket", "core", "uncore"):
-        csv_path = emon_out_dir / f"processed__mpp_{view}_view_summary.csv"
-        if csv_path.exists():
-            header, values = _read_emon_csv(csv_path)
-            if header:
-                out[view] = (header, values)
+        for csv_path in (
+            emon_out_dir / f"processed__mpp_{view}_view_summary.csv",  # older mpp.py
+            emon_out_dir / f"processed_{view}_view_summary.csv",       # newer mpp.py
+        ):
+            if csv_path.exists():
+                header, values = _read_emon_metrics_csv(csv_path)
+                if header:
+                    out[view] = (header, values)
+                break
     return out
 
 
