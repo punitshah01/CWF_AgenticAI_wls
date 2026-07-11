@@ -1222,8 +1222,17 @@ def main() -> None:
             task_dirs = sorted((out_dir / "telemetry").glob("task_*")) if (out_dir / "telemetry").exists() else []
             print(f"\n  Per-task EMON    : {len(task_dirs)} task(s) collected")
             for td in task_dirs[:5]:
+                # After successful EDP post-processing, the raw .txt is archived to
+                # .txt.tar.gz (see _archive_raw_emon in common/telemetry/emon.py) and
+                # removed — check both so successfully-processed tasks don't show "empty".
                 txt_files = list(td.glob("*.txt"))
-                status = f"{txt_files[0].name} ({txt_files[0].stat().st_size // 1024}KB)" if txt_files else "empty"
+                archives = list(td.glob("*.txt.tar.gz"))
+                if txt_files:
+                    status = f"{txt_files[0].name} ({txt_files[0].stat().st_size // 1024}KB)"
+                elif archives:
+                    status = f"{archives[0].name} ({archives[0].stat().st_size // 1024}KB, archived after EDP)"
+                else:
+                    status = "empty"
                 print(f"    {td.name}: {status}")
             if len(task_dirs) > 5:
                 print(f"    ... and {len(task_dirs)-5} more")
