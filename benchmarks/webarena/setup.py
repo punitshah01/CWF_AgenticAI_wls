@@ -692,45 +692,54 @@ def start_homepage(host: str, venv_path: str, dry_run: bool) -> None:
 
 # ── Step 8: Ollama LLM Server ─────────────────────────────────────────────────
 
-def setup_ollama(model: str, dry_run: bool) -> None:
+def setup_ollama(model: str, dry_run: bool, ollama_version: str = "") -> None:
     banner(f"Step 8: Ollama LLM Server (model: {model})")
 
     # Install Ollama — pass proxy env so curl can reach the internet on Intel network
     proxy_env_for_curl = {**os.environ, **get_proxy_env()}
-    if not shutil.which("ollama") or dry_run:
+
+    def _install_ollama(version: str) -> bool:
+        """Install Ollama, optionally pinned to a specific version. Returns True on success."""
+        version_prefix = f"OLLAMA_VERSION={version} " if version else ""
+        cmd = f"curl -fsSL https://ollama.com/install.sh | {version_prefix}sh"
         if dry_run:
-            log("[dry-run] curl -fsSL https://ollama.com/install.sh | sh", "info")
-        else:
-            result = subprocess.run(
-                "curl -fsSL https://ollama.com/install.sh | sh",
-                shell=True, env=proxy_env_for_curl,
-            )
-            if result.returncode != 0:
-                log("Ollama install failed — check network/proxy", "warn")
+            log(f"[dry-run] {cmd}", "info")
+            return True
+        result = subprocess.run(cmd, shell=True, env=proxy_env_for_curl)
+        if result.returncode != 0:
+            log(f"Ollama install failed (version={version or 'latest'}) — check network/proxy", "warn")
+            return False
+        return True
+
+    if not shutil.which("ollama") or dry_run or ollama_version:
+        _install_ollama(ollama_version)
 
     # Configure Ollama with proxy (required on Intel network for model pull)
     proxy_env = get_proxy_env()
     ollama_override_dir = Path("/etc/systemd/system/ollama.service.d")
-    if not dry_run:
-        ollama_override_dir.mkdir(parents=True, exist_ok=True)
-        lines = ["[Service]"]
-        for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
-            val = proxy_env.get(key) or proxy_env.get(key.lower())
-            if val:
-                lines.append(f'Environment="{key}={val}"')
-        lines.append('Environment="OLLAMA_HOST=0.0.0.0:11434"')
-        lines.append('Environment="OLLAMA_NUM_PARALLEL=4"')
-        (ollama_override_dir / "override.conf").write_text("\n".join(lines) + "\n")
 
-    run("systemctl daemon-reload", dry_run=dry_run)
-    # Always restart (not just enable) so the proxy env from override.conf takes effect.
-    # 'enable --now' is a no-op when the service is already running.
-    run("systemctl enable ollama", dry_run=dry_run)
-    run("systemctl restart ollama", dry_run=dry_run)
+    def _write_override_and_restart() -> None:
+        if not dry_run:
+            ollama_override_dir.mkdir(parents=True, exist_ok=True)
+            lines = ["[Service]"]
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+                val = proxy_env.get(key) or proxy_env.get(key.lower())
+                if val:
+                    lines.append(f'Environment="{key}={val}"')
+            lines.append('Environment="OLLAMA_HOST=0.0.0.0:11434"')
+            lines.append('Environment="OLLAMA_NUM_PARALLEL=4"')
+            (ollama_override_dir / "override.conf").write_text("\n".join(lines) + "\n")
+
+        run("systemctl daemon-reload", dry_run=dry_run)
+        # Always restart (not just enable) so the proxy env from override.conf takes effect.
+        # 'enable --now' is a no-op when the service is already running.
+        run("systemctl enable ollama", dry_run=dry_run)
+        run("systemctl restart ollama", dry_run=dry_run)
+        if not dry_run:
+            time.sleep(5)
+
+    _write_override_and_restart()
     log("Ollama service restarted with proxy config", "ok")
-
-    if not dry_run:
-        time.sleep(5)
 
     # Pull model — with automatic fallback from llama3:Xb → llama3.1:Xb
     # (Ollama library retired the plain 'llama3' tag; 'llama3.1' is the current name)
@@ -775,6 +784,63 @@ def setup_ollama(model: str, dry_run: bool) -> None:
         final_model = _pull_with_fallback(model)
 
     log(f"Ollama ready with model: {final_model}", "ok")
+
+    # ── Sanity check: does inference actually work, or does the CPU-microarch
+    # kernel dispatch segfault? Newer Ollama/ggml builds auto-select a CPU-
+    # optimized backend (e.g. libggml-cpu-sapphirerapids.so) based on detected
+    # ISA features (AMX_INT8, AVX512_BF16, ...). On brand-new CPU generations
+    # (e.g. Granite Rapids reporting Sapphire-Rapids-compatible feature bits),
+    # the selected kernel can genuinely GPF/segfault — this is a real upstream
+    # bug, not a config error, and it happens on EVERY model, not just one.
+    # If detected, fall back to a known-good older Ollama build that predates
+    # this per-microarch AMX dispatch and uses a safe generic AVX2 kernel.
+    OLLAMA_KNOWN_GOOD_FALLBACK = "0.5.7"
+
+    if dry_run:
+        return
+
+    log("Sanity-checking Ollama inference (detects CPU-microarch kernel crashes)...", "info")
+    check = subprocess.run(
+        ["ollama", "run", final_model, "hi"],
+        capture_output=True, text=True, timeout=90,
+    )
+    crashed = (
+        check.returncode != 0
+        or "segmentation fault" in (check.stderr or "").lower()
+        or "segmentation fault" in (check.stdout or "").lower()
+    )
+    if not crashed:
+        log("Ollama inference sanity check passed", "ok")
+        return
+
+    log(f"Ollama inference CRASHED (likely CPU-microarch AMX kernel dispatch bug on "
+        f"this platform) — falling back to known-good Ollama {OLLAMA_KNOWN_GOOD_FALLBACK}",
+        "error")
+    log(f"  {(check.stderr or check.stdout or '').strip().splitlines()[-1] if (check.stderr or check.stdout) else ''}",
+        "error")
+
+    if not _install_ollama(OLLAMA_KNOWN_GOOD_FALLBACK):
+        log(f"Failed to install fallback Ollama {OLLAMA_KNOWN_GOOD_FALLBACK} — "
+            "manual intervention required.", "error")
+        return
+
+    _write_override_and_restart()
+
+    recheck = subprocess.run(
+        ["ollama", "run", final_model, "hi"],
+        capture_output=True, text=True, timeout=90,
+    )
+    recheck_crashed = (
+        recheck.returncode != 0
+        or "segmentation fault" in (recheck.stderr or "").lower()
+        or "segmentation fault" in (recheck.stdout or "").lower()
+    )
+    if recheck_crashed:
+        log(f"Ollama {OLLAMA_KNOWN_GOOD_FALLBACK} STILL crashes on this host — "
+            "this needs manual investigation (dmesg / journalctl -u ollama).", "error")
+    else:
+        log(f"Fallback Ollama {OLLAMA_KNOWN_GOOD_FALLBACK} works — inference confirmed stable "
+            "(uses generic AVX2 backend, slower but crash-free)", "ok")
 
 
 # ── Step 8.7: Pre-fetch tiktoken encoding (needs network, do it once here) ──
@@ -1127,6 +1193,12 @@ def parse_args() -> argparse.Namespace:
                         help="Skip container start/config (if already running).")
     parser.add_argument("--model", default="llama3.1:8b",
                         help="Ollama model to pull. E.g. llama3.1:8b, llama3.1:70b")
+    parser.add_argument("--ollama-version", default="", metavar="VERSION",
+                        help="Pin a specific Ollama version (e.g. 0.5.7) instead of latest. "
+                             "Auto-used as a fallback if the latest version's inference "
+                             "sanity check segfaults (known issue: newer Ollama/ggml builds "
+                             "auto-select a CPU-microarch-specific AMX kernel that can crash "
+                             "on brand-new CPU generations like Granite Rapids).")
     parser.add_argument("--images-dir", default=str(IMAGES_DIR_DEFAULT),
                         help="Directory for Docker image tarballs / .zim file.")
     parser.add_argument("--dry-run", action="store_true",
@@ -1187,7 +1259,7 @@ def main() -> None:
 
     # Step 8: Ollama LLM
     if not args.skip_ollama:
-        setup_ollama(args.model, args.dry_run)
+        setup_ollama(args.model, args.dry_run, ollama_version=args.ollama_version)
 
     # Step 8.7: Pre-fetch tiktoken encoding (needs network — do it here, not
     # silently mid-benchmark run where a proxy-less shell would hang/timeout)
