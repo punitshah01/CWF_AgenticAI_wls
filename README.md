@@ -315,6 +315,7 @@ python3 scripts/inference/start_llamacpp.py --model 8b --models-dir assets/model
 | Throughput | Tasks completed per hour | tasks/hr |
 | Efficiency | Tasks per watt-hour | tasks/Wh |
 | Microarch | IPC, LLC MPKI, Mem BW % | EMON |
+| Microarch | Top hotspot function (perf-top) | % overhead |
 | SWE-bench | `resolve_rate` | % |
 | WebArena | `success_rate` | % |
 | OSWorld | `success_rate` | % |

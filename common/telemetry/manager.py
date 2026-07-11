@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Telemetry Manager — High-level facade for EMON + RAPL + SSMON + PTAT.
+Telemetry Manager — High-level facade for EMON + perf-top + RAPL + SSMON + PTAT.
 
 Usage:
     from common.telemetry import TelemetryManager
@@ -21,6 +21,7 @@ import threading
 import time
 
 from .emon  import EmonCollector
+from .perftop import PerfTopCollector
 from .rapl  import RaplCollector
 from .ssmon import SSMONCollector
 from .ptat  import PTATCollector
@@ -34,21 +35,28 @@ class TelemetryManager:
         output_dir: str = ".",
         platform: str = "clearwaterforest",
         collect_emon: bool = True,
+        collect_perftop: bool = False,
         collect_rapl: bool = True,
         collect_temp: bool = True,
         rapl_poll_interval_s: float = 5.0,
         emon_warmup_s: int = 0,
         emon_duration_s: Optional[int] = None,
+        perftop_warmup_s: int = 0,
+        perftop_duration_s: int = 150,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.platform   = platform.lower()
         self.collect_emon = collect_emon
+        self.collect_perftop = collect_perftop
         self.collect_rapl = collect_rapl
         self.collect_temp = collect_temp
         self.emon_warmup_s   = emon_warmup_s
         self.emon_duration_s = emon_duration_s
+        self.perftop_warmup_s = perftop_warmup_s
+        self.perftop_duration_s = perftop_duration_s
 
         self.emon  = EmonCollector(output_dir=str(self.output_dir))
+        self.perftop = PerfTopCollector(output_dir=str(self.output_dir))
         self.rapl  = RaplCollector(poll_interval_s=rapl_poll_interval_s)
 
         # Temperature: SSMON for CWF/DMR/GNR/SRF; PTAT for older
@@ -63,6 +71,8 @@ class TelemetryManager:
         self.rapl_mean: Dict[str, float] = {}
         self.emon_output_dir: Optional[Path] = None
         self.emon_ready = False
+        self.perftop_ready = False
+        self.perftop_summary: Optional[dict] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -113,6 +123,32 @@ class TelemetryManager:
                     print(f"[telemetry] EMON started (duration={dur})")
                 else:
                     print("[telemetry] EMON not available — skipping")
+
+        # perf-top/perf-record: delay by warmup_s then bounded collect for duration_s
+        if self.collect_perftop and self.perftop.is_available():
+            if self.perftop_warmup_s > 0:
+                print(f"[telemetry] perf-top warmup: waiting {self.perftop_warmup_s}s before starting collection …")
+                self._active.append("perftop")
+
+                def _delayed_start_perftop():
+                    time.sleep(self.perftop_warmup_s)
+                    if "perftop" in self._active:
+                        ok = self.perftop.start_collection(session_name, self.perftop_duration_s)
+                        if not ok:
+                            try:
+                                self._active.remove("perftop")
+                            except ValueError:
+                                pass
+                            print("[telemetry] perf-top failed to start after warmup")
+                threading.Thread(target=_delayed_start_perftop, daemon=True).start()
+            else:
+                if self.perftop.start_collection(session_name, self.perftop_duration_s):
+                    self._active.append("perftop")
+                    print(f"[telemetry] perf-top started (duration={self.perftop_duration_s}s)")
+                else:
+                    print("[telemetry] perf-top not available — skipping")
+        elif self.collect_perftop:
+            print("[telemetry] perf-top not available — skipping")
 
     def stop(
         self,
@@ -196,6 +232,15 @@ class TelemetryManager:
             else:
                 print(f"[telemetry] EMON collection: process_emon={process_emon}, file_exists={self.emon.output_file and self.emon.output_file.exists()}")
 
+        if "perftop" in self._active:
+            self.perftop.stop_collection()
+            self.perftop_summary = self.perftop.process_report()
+            self.perftop_ready = bool(self.perftop_summary)
+            if self.perftop_ready:
+                print(f"[telemetry] perf-top processing complete → {self.output_dir / 'perftop_summary.json'}")
+            else:
+                print("[telemetry] perf-top report processing failed")
+
         if "rapl" in self._active:
             self.rapl.stop_polling()
             self.rapl_mean = self.rapl.get_mean_power()
@@ -220,3 +265,13 @@ class TelemetryManager:
     def dram_power_w(self) -> float:
         """Aggregate DRAM power across all sockets (watts)."""
         return sum(v for k, v in self.rapl_mean.items() if "dram" in k.lower())
+
+    @property
+    def top_hotspot(self) -> Optional[str]:
+        """Top perf hotspot symbol from perftop_summary."""
+        if not self.perftop_summary:
+            return None
+        hotspots = self.perftop_summary.get("hotspots", [])
+        if not hotspots:
+            return None
+        return hotspots[0].get("symbol")

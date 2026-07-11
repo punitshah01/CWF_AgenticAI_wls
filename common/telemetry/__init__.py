@@ -1,6 +1,6 @@
 """
 Telemetry Collection Package
-Provides Intel telemetry collection and processing for EMON, RAPL, SSMON, PTAT.
+Provides Intel telemetry collection and processing for EMON, RAPL, SSMON, PTAT, perf-top.
 
 Mirrors pnpwls/common/telemetry/__init__.py API contract exactly.
 
@@ -10,6 +10,7 @@ Main Interface:
 
 Individual Collectors:
     EmonCollector  — EMON collection + EDP post-processing (emon -collect-edp)
+    PerfTopCollector — perf-top/perf-record hotspot sampling (windowed steady-state capture)
     RaplCollector  — RAPL power domain polling
     PTATCollector  — Temperature (legacy platforms)
     SSMONCollector — Temperature (CWF / DMR / GNR)
@@ -34,6 +35,7 @@ from .temperature import TemperatureMonitor    # noqa: F401
 
 # Individual collectors
 from .emon  import EmonCollector               # noqa: F401
+from .perftop import PerfTopCollector          # noqa: F401
 from .rapl  import RaplCollector               # noqa: F401
 from .ssmon import SSMONCollector              # noqa: F401
 from .ptat  import PTATCollector               # noqa: F401
@@ -135,6 +137,7 @@ __all__ = [
 
     # Individual collectors
     "EmonCollector",
+    "PerfTopCollector",
     "RaplCollector",
     "SSMONCollector",
     "PTATCollector",

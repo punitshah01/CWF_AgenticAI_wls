@@ -112,6 +112,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--run-id",           default="")
     p.add_argument("--llm-port",         type=int, default=8000)
     p.add_argument("--collect-emon",     action="store_true")
+    p.add_argument("--collect-perftop",  action="store_true")
+    p.add_argument("--perftop-duration", type=int, default=150)
     p.add_argument("--collect-rapl",     action="store_true", default=True)
     p.add_argument("--collect-temp",     action="store_true")
     p.add_argument("--dry-run",          action="store_true")
@@ -259,8 +261,11 @@ def main() -> None:
         output_dir=str(out_dir / "telemetry"),
         platform=platform,
         collect_emon=args.collect_emon,
+        collect_perftop=args.collect_perftop,
         collect_rapl=args.collect_rapl,
         collect_temp=args.collect_temp,
+        perftop_warmup_s=60 if args.collect_perftop else 0,
+        perftop_duration_s=args.perftop_duration,
     )
 
     if not args.dry_run:
@@ -278,6 +283,8 @@ def main() -> None:
     common_data.update(sys_meta)
     common_data["pkg_power_w"]  = str(tm.pkg_power_w)
     common_data["dram_power_w"] = str(tm.dram_power_w)
+    if tm.perftop_ready:
+        common_data["perftop_top_hotspot"] = tm.top_hotspot or "N/A"
 
     csv_file = out_dir / "results.csv"
     write_csv_row(csv_file, list(common_data.keys()), list(common_data.values()))
