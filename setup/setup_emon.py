@@ -66,16 +66,22 @@ PYEDP_PIP_PACKAGES = [
 
 
 def _run(cmd: str, dry_run: bool = False, check: bool = False,
-         capture: bool = False) -> subprocess.CompletedProcess:
+         capture: bool = False, timeout: float = None) -> subprocess.CompletedProcess:
     print(f"  $ {cmd}", flush=True)
     if dry_run:
         return subprocess.CompletedProcess(cmd, 0)
-    return subprocess.run(
-        cmd, shell=True,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
-        text=True,
-    )
+    try:
+        return subprocess.run(
+            cmd, shell=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[WARN] Command exceeded {timeout}s hard timeout — aborting: {cmd}",
+              file=sys.stderr)
+        return subprocess.CompletedProcess(cmd, 124)
 
 
 def check_system_dependencies(dry_run: bool) -> bool:
@@ -263,25 +269,38 @@ def download_sep(version: str, dry_run: bool) -> Path:
     # ("Name or service not known"). So try both direct and proxied for each
     # tool, and VALIDATE the result every time instead of trusting exit code
     # (a failed download can still leave a truncated/empty/HTML file behind).
+    #
+    # CRITICAL: every attempt is bounded to a short, fast-fail timeout. When
+    # Artifactory itself is down it returns 504 Gateway Timeout, and wget/curl
+    # will otherwise retry with growing backoff for MANY MINUTES before giving
+    # up — that previously stalled the whole setup until someone hit Ctrl+C.
+    # A hard per-attempt timeout (both via tool flags AND subprocess timeout=
+    # as a belt-and-suspenders backstop) guarantees we reach the local
+    # assets/installers/ fallback quickly instead of hanging.
+    ATTEMPT_TIMEOUT_S = 25
     attempts = []
     if shutil.which("wget"):
         attempts.append(("wget (direct)",
-                          f"wget --no-proxy --no-check-certificate -c --progress=bar:force -O {dest} '{url}'"))
+                          f"wget --no-proxy --no-check-certificate -c --tries=1 --timeout=10 "
+                          f"--progress=bar:force -O {dest} '{url}'"))
         attempts.append(("wget (via proxy)",
-                          f"wget --no-check-certificate -c --progress=bar:force -O {dest} '{url}'"))
+                          f"wget --no-check-certificate -c --tries=1 --timeout=10 "
+                          f"--progress=bar:force -O {dest} '{url}'"))
     if shutil.which("curl"):
         attempts.append(("curl (direct)",
-                          f"curl --noproxy '*' -k -L --continue-at - -o {dest} '{url}'"))
+                          f"curl --noproxy '*' -k -L --connect-timeout 10 --max-time 20 "
+                          f"--retry 0 --continue-at - -o {dest} '{url}'"))
         attempts.append(("curl (via proxy)",
-                          f"curl -k -L --continue-at - -o {dest} '{url}'"))
+                          f"curl -k -L --connect-timeout 10 --max-time 20 "
+                          f"--retry 0 --continue-at - -o {dest} '{url}'"))
 
     if not attempts:
         print("[ERROR] wget or curl required to download SEP", file=sys.stderr)
         sys.exit(1)
 
     for label, cmd in attempts:
-        print(f"[INFO] Attempt: {label}")
-        _run(cmd, dry_run=False)
+        print(f"[INFO] Attempt: {label} (max {ATTEMPT_TIMEOUT_S}s)")
+        _run(cmd, dry_run=False, timeout=ATTEMPT_TIMEOUT_S)
         if _is_valid_tar_bz2(dest):
             print(f"[ OK ] Downloaded valid SEP archive via {label}")
             return dest
