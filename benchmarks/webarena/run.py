@@ -181,6 +181,8 @@ def parse_args() -> argparse.Namespace:
                     help="Global steady-state EMON: wait 180s warmup after workload starts, "
                          "collect for 300s, then post-process with EDP to generate Excel/CSV. "
                          "Disables RAPL (EMON captures power counters). Requires /opt/intel/sep.")
+    p.add_argument("--collect-perftop", action="store_true")
+    p.add_argument("--perftop-duration", type=int, default=150)
     p.add_argument("--collect-rapl",    action="store_true", default=False,
                     help="Enable RAPL power monitoring. Off by default when --collect-emon is used "
                          "(EMON already captures power counters).")
@@ -1016,10 +1018,13 @@ def main() -> None:
             output_dir=str(out_dir / "telemetry"),
             platform=platform,
             collect_emon=args.collect_emon,
+            collect_perftop=args.collect_perftop,
             collect_rapl=collect_rapl_effective,
             collect_temp=args.collect_temp,
             emon_warmup_s=180 if args.collect_emon else 0,
             emon_duration_s=300 if args.collect_emon else None,
+            perftop_warmup_s=60 if args.collect_perftop else 0,
+            perftop_duration_s=args.perftop_duration,
         )
         _TELEMETRY_MANAGER = tm
 
@@ -1053,6 +1058,8 @@ def main() -> None:
         common_data.update(sys_meta)
         common_data["pkg_power_w"]  = str(tm.pkg_power_w)
         common_data["dram_power_w"] = str(tm.dram_power_w)
+        if tm.perftop_ready:
+            common_data["perftop_top_hotspot"] = tm.top_hotspot or "N/A"
         # Inference metrics (N/A strings when proxy was not used)
         common_data["avg_prompt_eval_tok_s"]   = str(infer_metrics.get("avg_prompt_eval_tok_s",   "N/A"))
         common_data["avg_generation_tok_s"]    = str(infer_metrics.get("avg_generation_tok_s",    "N/A"))
