@@ -867,10 +867,15 @@ def generate_test_data_and_login(host: str, venv_path: str,
             f'export HOMEPAGE="PASS"\n'
             f'export OPENAI_API_KEY="dummy"\n'
             f'export OPENAI_API_BASE="http://localhost:11434/v1"\n'
-            f'# Bypass Intel corporate proxy for WebArena local container IPs\n'
-            f'export NO_PROXY="{_no_proxy_val}"\n'
-            f'export no_proxy="{_no_proxy_val}"\n'
-            f'unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy\n'
+            f'# Bypass Intel corporate proxy ONLY for WebArena local container IPs —\n'
+            f'# APPEND to (never overwrite/unset) any existing proxy config, so this\n'
+            f'# does not break git/pip/curl to external hosts in your shell. Sourcing\n'
+            f'# this file is idempotent: it will not keep re-appending on repeated runs.\n'
+            f'case ",$NO_PROXY," in\n'
+            f'  *",{_no_proxy_val.split(",")[0]},"*) : ;;\n'
+            f'  *) export NO_PROXY="${{NO_PROXY:+$NO_PROXY,}}{_no_proxy_val}" ;;\n'
+            f'esac\n'
+            f'export no_proxy="$NO_PROXY"\n'
         )
     log(f"Environment file written to {env_file}", "ok")
 
