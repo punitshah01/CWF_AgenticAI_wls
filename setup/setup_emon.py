@@ -199,6 +199,16 @@ def ensure_kernel_devel(dry_run: bool) -> None:
     _run(f"{sys.executable} {script}", dry_run)
 
 
+def _is_valid_tar_bz2(path: Path) -> bool:
+    """Return True if `path` is a real (non-empty, non-HTML-error-page) bzip2 tar archive."""
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    probe = subprocess.run(
+        ["tar", "tjf", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    return probe.returncode == 0
+
+
 def download_sep(version: str, dry_run: bool) -> Path:
     """Download SEP tarball from artifactory. Returns path to local file."""
     filename = f"{version}.tar.bz2"
@@ -208,10 +218,7 @@ def download_sep(version: str, dry_run: bool) -> Path:
 
     if dest.exists():
         # Validate the cached file is a real tar archive, not a partial download or HTML error page
-        probe = subprocess.run(
-            ["tar", "tjf", str(dest)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        if probe.returncode == 0:
+        if _is_valid_tar_bz2(dest):
             print(f"[ OK ] SEP installer already cached: {dest}")
             return dest
         print(f"[WARN] Cached SEP archive is corrupt — deleting and re-downloading: {dest}")
@@ -227,21 +234,62 @@ def download_sep(version: str, dry_run: bool) -> Path:
     print(f"[INFO] URL: {url}")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
+    if dry_run:
+        return dest
+
+    # ubit-artifactory-or.intel.com is an Intel-internal host. On true
+    # intranet-connected lab benches it's reachable directly (--no-proxy).
+    # But some lab/cloud hosts only reach Intel-internal networks THROUGH the
+    # corp web proxy — direct access then fails DNS resolution entirely
+    # ("Name or service not known"). So try both direct and proxied for each
+    # tool, and VALIDATE the result every time instead of trusting exit code
+    # (a failed download can still leave a truncated/empty/HTML file behind).
+    attempts = []
     if shutil.which("wget"):
-        # --no-check-certificate: Intel internal Artifactory uses a corp cert
-        _run(f"wget --no-proxy --no-check-certificate -c --progress=bar:force -O {dest} '{url}'", dry_run)
-    elif shutil.which("curl"):
-        # -k: skip cert verification for Intel internal Artifactory
-        _run(f"curl --noproxy '*' -k -L --continue-at - -o {dest} '{url}'", dry_run)
-    else:
+        attempts.append(("wget (direct)",
+                          f"wget --no-proxy --no-check-certificate -c --progress=bar:force -O {dest} '{url}'"))
+        attempts.append(("wget (via proxy)",
+                          f"wget --no-check-certificate -c --progress=bar:force -O {dest} '{url}'"))
+    if shutil.which("curl"):
+        attempts.append(("curl (direct)",
+                          f"curl --noproxy '*' -k -L --continue-at - -o {dest} '{url}'"))
+        attempts.append(("curl (via proxy)",
+                          f"curl -k -L --continue-at - -o {dest} '{url}'"))
+
+    if not attempts:
         print("[ERROR] wget or curl required to download SEP", file=sys.stderr)
         sys.exit(1)
 
-    return dest
+    for label, cmd in attempts:
+        print(f"[INFO] Attempt: {label}")
+        _run(cmd, dry_run=False)
+        if _is_valid_tar_bz2(dest):
+            print(f"[ OK ] Downloaded valid SEP archive via {label}")
+            return dest
+        print(f"[WARN] {label} did not produce a valid tar.bz2 — trying next method.")
+        dest.unlink(missing_ok=True)
+
+    print(f"[ERROR] Could not download a valid SEP archive from {url}", file=sys.stderr)
+    print("[ERROR] This host may lack network/VPN access to Intel-internal "
+          "Artifactory (ubit-artifactory-or.intel.com). Options:", file=sys.stderr)
+    print("        1. Verify intranet/VPN connectivity and DNS resolution to "
+          "ubit-artifactory-or.intel.com, then retry.", file=sys.stderr)
+    print(f"        2. Manually download {filename} elsewhere and place it at "
+          f"{REPO_ROOT / 'assets' / 'installers' / filename}, then retry.", file=sys.stderr)
+    print(f"        3. Pass --sep-installer /path/to/{filename} to skip the download.",
+          file=sys.stderr)
+    sys.exit(1)
 
 
 def install_sep(installer: Path, dry_run: bool) -> None:
     """Extract and install SEP using sep-installer.sh (matches pnpwls approach)."""
+    if not dry_run and not _is_valid_tar_bz2(installer):
+        print(f"[ERROR] {installer} is not a valid tar.bz2 archive — refusing to extract.",
+              file=sys.stderr)
+        print("[ERROR] (empty file, truncated download, or an HTML error/proxy-block page)",
+              file=sys.stderr)
+        sys.exit(1)
+
     version_dir = installer.stem.replace(".tar", "")   # strip .tar.bz2
     extract_dir = Path.home() / "devtools" / version_dir
 
