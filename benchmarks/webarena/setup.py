@@ -869,8 +869,14 @@ def generate_test_data_and_login(host: str, venv_path: str,
     if not dry_run:
         auth_dir = WORKDIR / ".auth"
         auth_dir.mkdir(parents=True, exist_ok=True)
+        # Use our wrapper instead of upstream browser_env/auto_login.py directly —
+        # upstream silently swallows exceptions (never calls .result() on the
+        # ThreadPoolExecutor futures), so real Playwright/login errors never
+        # surface. The wrapper re-runs the same logins sequentially and prints
+        # the actual exception per site so failures are diagnosable.
+        auto_login_wrapper = REPO_ROOT / "benchmarks" / "webarena" / "lib" / "run_auto_login.py"
         result = subprocess.run(
-            [python, "browser_env/auto_login.py"],
+            [python, str(auto_login_wrapper)],
             cwd=workdir, env=env
         )
         cookie_files = list(auth_dir.glob("*.json"))
@@ -884,7 +890,7 @@ def generate_test_data_and_login(host: str, venv_path: str,
                 "after a short wait...", "error")
             time.sleep(20)
             result2 = subprocess.run(
-                [python, "browser_env/auto_login.py"],
+                [python, str(auto_login_wrapper)],
                 cwd=workdir, env=env
             )
             cookie_files = list(auth_dir.glob("*.json"))
@@ -893,7 +899,7 @@ def generate_test_data_and_login(host: str, venv_path: str,
             else:
                 log(f"Auto-login STILL produced no cookie files after retry. "
                     f"Check manually: docker logs shopping_admin --tail 50 ; "
-                    f"source ~/.cwf_webarena_env && {python} {workdir}/browser_env/auto_login.py",
+                    f"source ~/.cwf_webarena_env && {python} {auto_login_wrapper}",
                     "error")
         else:
             log("Auto-login partially failed (GitLab down is expected if skipped)", "warn")
