@@ -82,12 +82,12 @@ def main() -> None:
     _write_sysfs("/proc/sys/kernel/randomize_va_space", "0")
     print(f"      randomize_va_space: {_read_sysfs('/proc/sys/kernel/randomize_va_space')}")
 
-    # 4. Transparent Huge Pages → madvise
-    print("[4/4] Setting THP to madvise ...")
+    # 4. Transparent Huge Pages → always
+    print("[4/4] Setting THP to always ...")
     thp_base = Path("/sys/kernel/mm/transparent_hugepage")
     if thp_base.is_dir():
-        _write_sysfs(str(thp_base / "enabled"), "madvise")
-        _write_sysfs(str(thp_base / "defrag"), "defer+madvise")
+        _write_sysfs(str(thp_base / "enabled"), "always")
+        _write_sysfs(str(thp_base / "defrag"), "always")
         print(f"      THP enabled: {_read_sysfs(str(thp_base / 'enabled'))}")
     else:
         print("      WARNING: THP sysfs not found — skipping")

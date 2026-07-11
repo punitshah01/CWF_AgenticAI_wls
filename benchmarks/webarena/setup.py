@@ -254,12 +254,21 @@ def setup_playwright_deps(os_family: str, dry_run: bool) -> None:
         run(f"dnf install -y {PLAYWRIGHT_CENTOS_PKGS}", dry_run=dry_run)
         log("Playwright deps installed via dnf (RHEL workaround)", "ok")
     else:
-        run("apt-get install -y "
+        base_pkgs = (
             "libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 "
             "libcups2 libdrm2 libdbus-1-3 libxcb1 libxkbcommon0 "
             "libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 "
-            "libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2",
-            dry_run=dry_run)
+            "libxrandr2 libgbm1 libpango-1.0-0 libcairo2"
+        )
+        # libasound2 was renamed libasound2t64 on Ubuntu 24.04 (noble, 64-bit
+        # time_t transition) with NO transitional dummy package — unlike the
+        # other libs above (apt auto-selects e.g. libglib2.0-0t64), asking for
+        # the wrong name here makes the ENTIRE apt-get install fail atomically,
+        # silently skipping every other package in the list too. Try both.
+        result = run(f"apt-get install -y {base_pkgs} libasound2t64", dry_run=dry_run)
+        if not dry_run and result.returncode != 0:
+            log("libasound2t64 unavailable — retrying with legacy libasound2 ...", "warn")
+            run(f"apt-get install -y {base_pkgs} libasound2", dry_run=dry_run)
         log("Playwright deps installed via apt", "ok")
 
 
@@ -288,10 +297,34 @@ def setup_python_env(dry_run: bool) -> str:
             dry_run=dry_run)
         python_bin = "python3.11"
 
+    # Ensure the matching venv/ensurepip package is installed FIRST.
+    # `python3 -m venv` silently creates a BROKEN environment (no pip, no
+    # activate) without it — e.g. Ubuntu 24.04's system python3 is 3.12 and
+    # needs python3.12-venv, which is not installed by default.
+    ver_out = run_capture(f"{python_bin} --version") or ""
+    import re as _re
+    m = _re.search(r"(\d+)\.(\d+)", ver_out)
+    venv_pkg = f"python3.{m.group(2)}-venv" if m else "python3-venv"
+    run(f"apt-get install -y {venv_pkg} python3-venv 2>/dev/null || "
+        f"dnf install -y {venv_pkg} 2>/dev/null || true", dry_run=dry_run)
+
     if not venv_path.exists() or dry_run:
         run(f"{python_bin} -m venv {venv_path}", dry_run=dry_run)
 
     pip = str(venv_path / "bin" / "pip")
+
+    # Verify the venv actually has a working pip before doing anything else —
+    # if the venv package was missing, python -m venv exits 0 but leaves a
+    # broken env, and every subsequent pip/playwright call would silently
+    # no-op (`/bin/sh: pip: not found`) instead of failing loudly.
+    if not dry_run and not Path(pip).exists():
+        log(f"venv at {venv_path} has no pip — recreating with --clear ...", "warn")
+        run(f"rm -rf {venv_path} && {python_bin} -m venv {venv_path}", dry_run=dry_run)
+
+    if not dry_run and not Path(pip).exists():
+        log(f"FATAL: could not create a working venv at {venv_path} (pip still "
+            f"missing). Install '{venv_pkg}' manually, then rerun.", "error")
+        sys.exit(1)
 
     run(f"{pip} install --upgrade pip setuptools wheel", dry_run=dry_run)
     webarena_pkgs = [
@@ -321,14 +354,19 @@ def setup_python_env(dry_run: bool) -> str:
     if dry_run:
         log(f"[dry-run] {venv_path}/bin/playwright install chromium", "info")
     else:
-        pw_result = subprocess.run(
-            [f"{venv_path}/bin/playwright", "install", "chromium"],
-            env=pw_env,
-        )
-        if pw_result.returncode != 0:
-            log("playwright install chromium failed — browser may not work", "warn")
+        playwright_bin = f"{venv_path}/bin/playwright"
+        if not Path(playwright_bin).exists():
+            log(f"playwright binary not found at {playwright_bin} — pip install of "
+                "the 'playwright' package likely failed above.", "error")
         else:
-            log("Playwright Chromium browser installed", "ok")
+            pw_result = subprocess.run(
+                [playwright_bin, "install", "chromium"],
+                env=pw_env,
+            )
+            if pw_result.returncode != 0:
+                log("playwright install chromium failed — browser may not work", "warn")
+            else:
+                log("Playwright Chromium browser installed", "ok")
 
     log(f"Python venv ready at {venv_path}", "ok")
     return str(venv_path)
