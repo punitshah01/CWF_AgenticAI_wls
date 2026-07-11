@@ -58,9 +58,14 @@ PYEDP_DIR = SEP_ROOT / "config" / "edp" / "pyedp"
 PYEDP_PATH = PYEDP_DIR / "pyedp.py"
 
 # Full pyedp Python dependency list — matches pnpwls/setup/setup_emon.sh
+# NOTE: 'dataclasses' (the PyPI backport for Python <3.7) is deliberately
+# EXCLUDED here. Python 3.7+ has dataclasses built into stdlib; installing
+# the backport package shadows/breaks it (e.g. pandas/openai crash with
+# "module 'typing' has no attribute '_ClassVar'") on ANY interpreter it
+# lands in, system or venv.
 PYEDP_PIP_PACKAGES = [
     "numpy", "pandas", "defusedxml", "pytz", "xlsxwriter",
-    "multiprocess", "tables", "natsort", "tqdm", "dataclasses",
+    "multiprocess", "tables", "natsort", "tqdm",
     "polars", "openpyxl", "pyarrow", "jsonschema",
 ]
 
@@ -130,6 +135,24 @@ def check_system_dependencies(dry_run: bool) -> bool:
     return True
 
 
+def _system_python() -> str:
+    """Absolute path to the SYSTEM python3 — never a venv's python.
+
+    CRITICAL: this must be used for every pyedp dependency install. Bare
+    'python3' resolves to whatever venv happens to be active in the
+    invoking shell (e.g. a benchmark's activate_*.sh sourced beforehand),
+    silently installing pyedp's deps (including a 'dataclasses' PyPI
+    backport package meant for Python <3.7) INTO that venv instead of the
+    system Python. That backport shadows the real stdlib 'dataclasses'
+    module and breaks anything relying on its Python 3.7+ internals (e.g.
+    pandas/openai raise 'module typing has no attribute _ClassVar').
+    """
+    for candidate in ("/usr/bin/python3", "/usr/bin/python3.11", "/usr/bin/python3.12"):
+        if os.path.exists(candidate):
+            return candidate
+    return shutil.which("python3") or "python3"
+
+
 def ensure_python_pip(dry_run: bool) -> bool:
     """Ensure python3 -m pip is available for pyedp dependency installation."""
     print("\n[INFO] Checking python3 pip availability ...")
@@ -137,8 +160,9 @@ def ensure_python_pip(dry_run: bool) -> bool:
         print("[ OK ] (dry-run) assuming python3 pip is available")
         return True
 
+    py = _system_python()
     check = subprocess.run(
-        ["python3", "-m", "pip", "--version"],
+        [py, "-m", "pip", "--version"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -149,14 +173,14 @@ def ensure_python_pip(dry_run: bool) -> bool:
 
     print("[WARN] python3 pip is missing, trying ensurepip ...", file=sys.stderr)
     ensurepip = subprocess.run(
-        ["python3", "-m", "ensurepip", "--upgrade"],
+        [py, "-m", "ensurepip", "--upgrade"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
     if ensurepip.returncode == 0:
         recheck = subprocess.run(
-            ["python3", "-m", "pip", "--version"],
+            [py, "-m", "pip", "--version"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -182,7 +206,7 @@ def ensure_python_pip(dry_run: bool) -> bool:
         if r.returncode != 0:
             continue
         recheck = subprocess.run(
-            ["python3", "-m", "pip", "--version"],
+            [py, "-m", "pip", "--version"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -402,8 +426,9 @@ def configure_pyedp(dry_run: bool) -> None:
     env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
 
     # Full pyedp dependency list
+    py = _system_python()
     pkgs = " ".join(PYEDP_PIP_PACKAGES)
-    cmd = f"python3 -m pip install -U {pkgs}"
+    cmd = f"{py} -m pip install -U {pkgs}"
     print(f"  $ {cmd}", flush=True)
     if not dry_run:
         r = subprocess.run(cmd, shell=True, env=env)
@@ -413,7 +438,7 @@ def configure_pyedp(dry_run: bool) -> None:
     if PYEDP_DIR.exists():
         # SEP shipped pyedp source under /opt/intel/sep — install from there
         print(f"[ OK ] pyedp directory: {PYEDP_DIR}")
-        cmd = f"cd {PYEDP_DIR} && python3 -m pip install ."
+        cmd = f"cd {PYEDP_DIR} && {py} -m pip install ."
         print(f"  $ {cmd}", flush=True)
         if not dry_run:
             r = subprocess.run(cmd, shell=True, env=env)
@@ -425,7 +450,7 @@ def configure_pyedp(dry_run: bool) -> None:
         if candidates:
             found_dir = candidates[0].parent
             print(f"[ OK ] pyedp found at: {found_dir}")
-            _run(f"cd {found_dir} && python3 -m pip install .", dry_run)
+            _run(f"cd {found_dir} && {py} -m pip install .", dry_run)
         else:
             # pyedp is not bundled with this SEP release.
             # Install only the dependency packages — pyedp.py itself must come
