@@ -398,8 +398,13 @@ class EmonCollector:
             except Exception:
                 parallel_threads = 48
 
-        # Build view flags
-        view_flags = [f"--{v}" for v in views if v]
+        # Build view flags. Always pass --no-detail-views: we only need the
+        # summary CSVs (__mpp_*_view_summary.csv). Newer mpp.py builds (e.g.
+        # 5.19.0 from SEP 5.57) generate per-sample "detail views" by default,
+        # which is slow, unneeded, and was observed to crash with
+        # FileNotFoundError writing "processed_<view>_view_details.csv" when
+        # combined with high parallelism / multi-partition processing.
+        view_flags = [f"--{v}" for v in views if v] + ["--no-detail-views"]
 
         cmd = [
             _sys_python, str(mpp_script),
