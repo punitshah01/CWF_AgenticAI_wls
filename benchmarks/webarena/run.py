@@ -1169,10 +1169,13 @@ def main() -> None:
                 ]
                 write_csv_row(_pt_csv, _pt_header, _pt_row, verbose=False)
 
-        # ── Write summary.csv: one row PER TASK with KPI + system metadata +
-        # EMON views merged in (mirrors pnpwls/speccpu's summary CSV pattern).
-        # Columns are stable across rows so the file stays append-friendly if
-        # you point multiple runs at results/webarena/summary.csv over time.
+        # ── Write summary.csv: one row PER TASK with KPI + system metadata,
+        # SYSTEM VIEW ONLY (mirrors pnpwls/speccpu's primary results CSV
+        # pattern: py_speccpu_summary_$(hostname).csv carries system view
+        # data, while socket/core views go to their OWN separate files —
+        # py_speccpu_socketview_summary_*.csv / py_speccpu_coreview_summary_*.csv).
+        # Socket/core/uncore views here go to summary_socket.csv /
+        # summary_core.csv / summary_uncore.csv instead of the main summary.
         if per_task_results:
             _emon_mode = "per_task" if args.emon else ("global" if args.collect_emon else "none")
 
@@ -1213,19 +1216,14 @@ def main() -> None:
             _run_level["emon_mode"]        = _emon_mode
             _run_level["emon_collected"]   = str(tm.emon_ready) if args.collect_emon else str(bool(_task_views))
 
-            _summary_header = (
-                ["task_idx", "intent", "result", "runtime_s",
-                 "num_requests", "prompt_tokens", "completion_tokens",
-                 "avg_prompt_eval_tok_s", "avg_gen_tok_s", "avg_ttft_ms"]
-                + list(_run_level.keys())
-            )
-            for _vname, _vheader_cols in _view_headers.items():
-                _summary_header += [f"emon_{_vname}_{c}" for c in _vheader_cols]
+            _kpi_header = [
+                "task_idx", "intent", "result", "runtime_s",
+                "num_requests", "prompt_tokens", "completion_tokens",
+                "avg_prompt_eval_tok_s", "avg_gen_tok_s", "avg_ttft_ms",
+            ]
 
-            _summary_csv = out_dir / "summary.csv"
-            for _pt in per_task_results:
-                _tidx = _pt.get("task_idx")
-                _row = [
+            def _kpi_row(_pt: Dict) -> List[str]:
+                return [
                     str(_pt.get("task_idx",              "")),
                     str(_pt.get("intent",                "")),
                     str(_pt.get("result",                "")),
@@ -1236,18 +1234,39 @@ def main() -> None:
                     str(_pt.get("avg_prompt_eval_tok_s", "")),
                     str(_pt.get("avg_gen_tok_s",         "")),
                     str(_pt.get("avg_ttft_ms",           "")),
-                ] + [str(v) for v in _run_level.values()]
+                ]
 
-                for _vname, _vheader_cols in _view_headers.items():
-                    _views = _task_views.get(_tidx, {})
-                    if _vname in _views:
-                        _row += _views[_vname][1].split(",")
-                    else:
-                        _row += [""] * len(_vheader_cols)
+            def _write_view_csv(csv_path: Path, view_name: Optional[str]) -> None:
+                """Write one row per task; if view_name is given and was
+                collected for at least one task, append its EMON columns
+                (blank-padded for tasks missing that specific view)."""
+                header = list(_kpi_header) + list(_run_level.keys())
+                header_cols = _view_headers.get(view_name, []) if view_name else []
+                if view_name and header_cols:
+                    header += [f"emon_{view_name}_{c}" for c in header_cols]
+                for _pt in per_task_results:
+                    _tidx = _pt.get("task_idx")
+                    row = _kpi_row(_pt) + [str(v) for v in _run_level.values()]
+                    if view_name and header_cols:
+                        _views = _task_views.get(_tidx, {})
+                        if view_name in _views:
+                            row += _views[view_name][1].split(",")
+                        else:
+                            row += [""] * len(header_cols)
+                    write_csv_row(csv_path, header, row, verbose=False)
 
-                write_csv_row(_summary_csv, _summary_header, _row, verbose=False)
-            print(f"[webarena] summary.csv written → {_summary_csv} "
-                  f"({len(per_task_results)} task rows, emon_mode={_emon_mode})")
+            # Main summary.csv — SYSTEM VIEW ONLY.
+            _write_view_csv(out_dir / "summary.csv", "system")
+            print(f"[webarena] summary.csv written → {out_dir / 'summary.csv'} "
+                  f"({len(per_task_results)} task rows, emon_mode={_emon_mode}, view=system)")
+
+            # Separate per-view CSVs for socket/core/uncore — only written if
+            # that view was actually collected for at least one task.
+            for _vname in ("socket", "core", "uncore"):
+                if _vname in _view_headers:
+                    _vpath = out_dir / f"summary_{_vname}.csv"
+                    _write_view_csv(_vpath, _vname)
+                    print(f"[webarena] summary_{_vname}.csv written → {_vpath}")
 
         # ── Final Summary ─────────────────────────────────────────────────────
         total_tokens = (infer_metrics.get("total_prompt_tokens", 0)
