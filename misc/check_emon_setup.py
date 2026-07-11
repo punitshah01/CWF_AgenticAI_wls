@@ -26,12 +26,20 @@ import sys
 from pathlib import Path
 
 SEP_ROOT = Path("/opt/intel/sep")
+REPO_ROOT = Path(__file__).resolve().parent.parent
 MIN_VERSION = (5, 32)
 
 
-def _run(cmd: str) -> tuple:
-    """Run a shell command. Returns (returncode, stdout, stderr)."""
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+def _run(cmd: str, use_bash: bool = False) -> tuple:
+    """Run a shell command. Returns (returncode, stdout, stderr).
+
+    use_bash=True runs via /bin/bash so `source` works (needed for sep_vars.sh;
+    the default shell on Debian/Ubuntu is dash, which lacks `source`).
+    """
+    r = subprocess.run(
+        cmd, shell=True, executable="/bin/bash" if use_bash else None,
+        capture_output=True, text=True,
+    )
     return r.returncode, r.stdout.strip(), r.stderr.strip()
 
 
@@ -50,8 +58,19 @@ def check_sep_version() -> dict:
     if not emon_bin.exists():
         return {"name": "SEP version", "ok": False, "detail": "emon binary not found"}
 
-    rc, out, err = _run(f"{emon_bin} --version 2>&1 | head -4")
-    combined = (out + " " + err).replace("(", " ").replace(")", " ").replace(",", " ")
+    # emon requires the SEP environment (LD_LIBRARY_PATH etc.) sourced from
+    # sep_vars.sh to run at all — invoking the bare binary directly can fail
+    # silently (missing shared libs) and yield no usable version output.
+    sep_vars = SEP_ROOT / "sep_vars.sh"
+    source_prefix = f"source {sep_vars} && " if sep_vars.exists() else ""
+
+    combined = ""
+    for flag in ("-v", "-version", "--version"):
+        rc, out, err = _run(f"{source_prefix}{emon_bin} {flag} 2>&1 | head -4", use_bash=True)
+        combined = (out + " " + err).replace("(", " ").replace(")", " ").replace(",", " ")
+        if combined.strip():
+            break
+
     version_str = "unknown"
     version_ok = False
 
@@ -75,13 +94,21 @@ def check_sep_version() -> dict:
 
     if version_str == "unknown":
         # Last resort: version is embedded in the installed directory name
-        # e.g. sep_private_5_58_beta_linux_...
-        m2 = re.search(r"sep[^/]*?(\d+)[._](\d+)",
-                       str(list(SEP_ROOT.glob("../*sep*"))[:1]), re.IGNORECASE)
-        if m2:
-            major, minor = int(m2.group(1)), int(m2.group(2))
-            version_str = f"{major}.{minor} (from dir name)"
-            version_ok = (major, minor) >= MIN_VERSION
+        # e.g. sep_private_5_58_beta_linux_... or sep_private_5_59_linux_...
+        # Search common staging locations rather than a fragile ".." glob.
+        search_dirs = [Path.home() / "devtools", REPO_ROOT / "assets" / "installers"]
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            for entry in d.glob("*sep*"):
+                m2 = re.search(r"sep\D*(\d+)[._](\d+)", entry.name, re.IGNORECASE)
+                if m2:
+                    major, minor = int(m2.group(1)), int(m2.group(2))
+                    version_str = f"{major}.{minor} (from staged installer name)"
+                    version_ok = (major, minor) >= MIN_VERSION
+                    break
+            if version_str != "unknown":
+                break
 
     return {
         "name": "SEP version",
