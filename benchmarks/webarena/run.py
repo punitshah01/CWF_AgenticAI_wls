@@ -798,6 +798,14 @@ def run_evaluation(args: argparse.Namespace, run_id: str,
     # Chromium also respects these env vars for proxy bypass
     env["PLAYWRIGHT_NO_PROXY"] = _local_no_proxy
 
+    # CRITICAL: Chromium was installed to this custom path (setup.py Step 3),
+    # not Playwright's default ~/.cache/ms-playwright/. Upstream WebArena's
+    # own run.py internally re-invokes browser_env/auto_login.py mid-task to
+    # renew an expiring cookie (`renew_comb(args.site_list, ...)`) — without
+    # this env var that subprocess fails with "Executable doesn't exist at
+    # ~/.cache/ms-playwright/...", aborting the whole task.
+    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".playwright-browsers"))
+
     # Ensure WebArena's internal subprocess calls (e.g. auto_login.py) use the
     # venv python — not the system python3 which lacks playwright.
     # Prepending the venv bin to PATH means `python3` resolves to the venv python.
