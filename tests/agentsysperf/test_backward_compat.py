@@ -50,7 +50,7 @@ def test_new_artifacts_are_additive_and_do_not_touch_legacy_files(tmp_path):
     writer = ResultsJsonWriter(output_dir=tmp_path, run_id="run1")
     writer.add_row(common_data=OrderedDict([("tasks_total", "100")]))
     writer.save()
-    legacy_json_before = (tmp_path / "results.json").read_text()
+    legacy_json_before = json.loads((tmp_path / "results.json").read_text())
 
     summary = build_run_summary(
         workload="tbench",
@@ -66,7 +66,7 @@ def test_new_artifacts_are_additive_and_do_not_touch_legacy_files(tmp_path):
 
     # Legacy files unchanged.
     assert legacy_csv.read_text() == legacy_contents_before
-    assert (tmp_path / "results.json").read_text() == legacy_json_before
+    assert json.loads((tmp_path / "results.json").read_text()) == legacy_json_before
 
     # New files additive.
     assert (tmp_path / "agentsysperf_summary.json").exists()

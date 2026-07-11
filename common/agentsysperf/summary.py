@@ -34,7 +34,7 @@ from typing import Dict, Optional, Sequence
 
 from common.agentsysperf.cost import compute_cost
 from common.agentsysperf.models import CostModelConfig, PhaseTiming, SLOConfig
-from common.agentsysperf.percentiles import p50, p95, p99
+from common.agentsysperf.percentiles import mean, p50, p95, p99
 from common.agentsysperf.phases import (
     aggregate_phases,
     infer_phase_shares_from_mean_latency,
@@ -101,7 +101,7 @@ def build_run_summary(
 
     # Phase timing: use true measurements if present, otherwise fall back to
     # an explicitly labeled "inferred" split of the mean loop latency.
-    mean_latency = (sum(loop_latencies_ms) / len(loop_latencies_ms)) if loop_latencies_ms else None
+    mean_latency = mean(loop_latencies_ms)
     inferred_shares = infer_phase_shares_from_mean_latency(mean_latency)
     phase_attrs = aggregate_phases(phase_samples, inferred_from_total=inferred_shares)
 

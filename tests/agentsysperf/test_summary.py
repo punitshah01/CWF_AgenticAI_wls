@@ -45,6 +45,7 @@ def test_build_run_summary_missing_data_does_not_crash():
     assert kpi["slo_status"] == "not_evaluated"
     for phase in summary["phases"]:
         assert phase["source"] == "unavailable"
+        assert phase["reason"] is not None
 
 
 def test_write_run_artifacts_creates_all_files(tmp_path):

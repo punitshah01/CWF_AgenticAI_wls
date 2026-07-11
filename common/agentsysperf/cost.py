@@ -28,6 +28,13 @@ def compute_cost(cfg: CostModelConfig, tasks_completed: int) -> CostModelResult:
     has_price = cfg.energy_price_usd_per_kwh is not None
 
     if has_power and has_price:
+        # DRAM power is optional even in compute_plus_energy mode: if it is
+        # not supplied we assume 0W rather than skipping the energy
+        # component entirely, since package power still dominates the
+        # energy cost for most agentic workloads. This slightly
+        # underestimates true energy cost when DRAM telemetry is missing;
+        # callers that need a more conservative estimate should supply
+        # ``avg_dram_power_w`` explicitly (e.g. from RAPL).
         dram_w = cfg.avg_dram_power_w or 0.0
         total_watts = cfg.avg_package_power_w + dram_w
         kwh = (total_watts / 1000.0) * hours

@@ -33,29 +33,30 @@ REQUIRED_PHASE_NAMES = {"admit", "retrieve", "act", "decision", "commit"}
 
 
 @pytest.mark.parametrize(
-    "wrapper,extra_args",
+    "wrapper",
     [
-        ("benchmarks/appworld/run_appworld.py", ["--output-dir", "/tmp/agentsysperf_smoke_appworld"]),
-        ("benchmarks/osworld/run_osworld.py", ["--output-dir", "/tmp/agentsysperf_smoke_osworld"]),
-        ("benchmarks/swe-bench/run_swe_bench.py", ["--output-dir", "/tmp/agentsysperf_smoke_swebench"]),
-        ("benchmarks/t-bench/run_t_bench.py", ["--output-dir", "/tmp/agentsysperf_smoke_tbench"]),
-        ("benchmarks/webarena/run_webarena.py", ["--output-dir", "/tmp/agentsysperf_smoke_webarena"]),
+        "benchmarks/appworld/run_appworld.py",
+        "benchmarks/osworld/run_osworld.py",
+        "benchmarks/swe-bench/run_swe_bench.py",
+        "benchmarks/t-bench/run_t_bench.py",
+        "benchmarks/webarena/run_webarena.py",
     ],
 )
-def test_dry_run_still_works(wrapper, extra_args):
+def test_dry_run_still_works(wrapper, tmp_path):
     """Existing dry-run CLI path must keep working unmodified (section G).
 
     Some wrapper scripts check for a `.setup_complete` marker unconditionally
     (pre-existing behavior, unrelated to this change) — create it temporarily
     so the dry-run path itself can be exercised end-to-end.
     """
+    out_dir = tmp_path / "smoke_out"
     marker = REPO_ROOT / Path(wrapper).parent / ".setup_complete"
     marker_created = not marker.exists()
     if marker_created:
         marker.touch()
     try:
         result = subprocess.run(
-            [sys.executable, str(REPO_ROOT / wrapper), "--dry-run", *extra_args],
+            [sys.executable, str(REPO_ROOT / wrapper), "--dry-run", "--output-dir", str(out_dir)],
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,

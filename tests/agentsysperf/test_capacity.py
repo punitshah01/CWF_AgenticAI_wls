@@ -11,6 +11,7 @@ def test_saturation_on_first_slo_failure():
     assert summary.saturation_point == 4
     assert "SLA failed" in summary.saturation_reason
     assert summary.recommended_operating_point == 2
+    assert summary.recommended_reason is not None
 
 
 def test_recommended_point_prefers_stable_tail_latency():
@@ -38,3 +39,14 @@ def test_empty_points_returns_none():
     assert summary.saturation_point is None
     assert summary.recommended_operating_point is None
     assert summary.saturation_reason is not None
+
+
+def test_zero_p95_latency_is_not_treated_as_missing():
+    # p95_latency_ms=0.0 is a valid (falsy but not None) measurement and must
+    # not be mistaken for "unavailable" tail-latency data.
+    points = [
+        SweepPoint(concurrency=1, throughput_tasks_per_hour=100, p95_latency_ms=0.0, p99_latency_ms=0.0, slo_passed=True),
+    ]
+    summary = detect_capacity(points)
+    assert summary.recommended_operating_point == 1
+    assert summary.recommended_reason is not None

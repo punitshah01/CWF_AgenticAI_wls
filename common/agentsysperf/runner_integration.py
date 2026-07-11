@@ -13,6 +13,7 @@ guarantee).
 """
 
 import argparse
+import traceback
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -157,4 +158,5 @@ def emit_agentsysperf_artifacts(
         return write_run_artifacts(output_dir, summary)
     except Exception as exc:  # noqa: BLE001 — never break the primary pipeline
         print(f"[agentsysperf] WARNING: failed to emit AgentSysPerf artifacts: {exc}")
+        print(traceback.format_exc())
         return None

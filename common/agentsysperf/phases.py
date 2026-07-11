@@ -70,6 +70,16 @@ def aggregate_phases(
 # Default phase-share heuristic used to derive "inferred" phase timings from
 # a single end-to-end loop-latency number when no per-phase telemetry exists.
 # Values are fractions of total loop latency and must sum to 1.0.
+#
+# Rationale: these fractions reflect the typical shape of an agentic tool-use
+# loop observed across the 5 workloads in this repo — the "act" phase
+# (tool execution / GUI or browser action / patch application) dominates
+# wall-clock time, "decision" (LLM policy/inference call) is the second
+# largest contributor, and "admit"/"retrieve"/"commit" bookend the loop with
+# comparatively small, mostly I/O-bound overhead. This is a documented
+# approximation (source="inferred"), not a measurement — see
+# docs/agentsysperf.md §6 for the per-workload phase mapping and the plan to
+# replace it with true per-phase instrumentation.
 DEFAULT_PHASE_SHARE = {
     "admit": 0.05,
     "retrieve": 0.15,

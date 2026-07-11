@@ -60,6 +60,8 @@ def run_concurrency_sweep(
         points.append(
             SweepPoint(
                 concurrency=concurrency,
+                # len(throughputs) == max(1, repetitions) (see loop above),
+                # so this division is always safe (never zero).
                 throughput_tasks_per_hour=(sum(throughputs) / len(throughputs)),
                 p95_latency_ms=p95(all_latencies),
                 p99_latency_ms=p99(all_latencies),

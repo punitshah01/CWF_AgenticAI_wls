@@ -12,6 +12,14 @@ collected by the sweep engine, determine:
   * recommended_point   — highest concurrency that still passes SLA and has
                           "stable" tail latency (p99/p95 ratio below
                           ``tail_ratio_max``).
+
+Known limitation: the marginal-gain-collapse rule compares a single step's
+gain to the best gain seen so far, so a transient measurement dip (noise)
+could in principle trigger an early false-positive saturation call. Callers
+that need extra robustness should increase ``repetitions`` in
+``run_concurrency_sweep`` (the sweep engine averages throughput across
+repetitions per concurrency point before this detector ever runs) rather
+than smoothing inside this deterministic, single-pass detector.
 """
 
 from dataclasses import dataclass
@@ -93,8 +101,8 @@ def detect_capacity(
         if p.slo_passed and (saturation_point is None or p.concurrency < saturation_point)
     ]
     for point in reversed(candidates):
-        if point.p95_latency_ms and point.p99_latency_ms:
-            ratio = point.p99_latency_ms / point.p95_latency_ms
+        if point.p95_latency_ms is not None and point.p99_latency_ms is not None:
+            ratio = point.p99_latency_ms / point.p95_latency_ms if point.p95_latency_ms != 0 else None
         else:
             ratio = None
         if ratio is None or ratio <= tail_ratio_max:
