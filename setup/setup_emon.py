@@ -320,7 +320,7 @@ def download_sep(version: str, dry_run: bool) -> Path:
     print(f"[INFO] Attempt: Artifactory download (max {ATTEMPT_TIMEOUT_S}s, single try)")
     _run(cmd, dry_run=False, timeout=ATTEMPT_TIMEOUT_S + 5)
     if _is_valid_tar_bz2(dest):
-        print(f"[ OK ] Downloaded valid SEP archive from Artifactory")
+        print("[ OK ] Downloaded valid SEP archive from Artifactory")
         return dest
 
     dest.unlink(missing_ok=True)
@@ -363,7 +363,7 @@ def download_sep(version: str, dry_run: bool) -> Path:
           file=sys.stderr)
     print(f"        3. Manually download a SEP installer and place it at "
           f"{REPO_ROOT / 'assets' / 'installers'}/, then retry.", file=sys.stderr)
-    print(f"        4. Pass --sep-installer /path/to/sep_....tar.bz2 to skip the download.",
+    print("        4. Pass --sep-installer /path/to/sep_....tar.bz2 to skip the download.",
           file=sys.stderr)
     sys.exit(1)
 
