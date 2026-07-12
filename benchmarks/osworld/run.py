@@ -48,6 +48,10 @@ from common.csv_writer import write_csv_row
 from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
 from common.cli_utils import teardown_logging
+from common.agentsysperf.runner_integration import (
+    add_agentsysperf_args,
+    emit_agentsysperf_artifacts,
+)
 
 BENCHMARK = "osworld"
 BENCHMARK_DIR = Path(__file__).resolve().parent
@@ -113,6 +117,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--collect-rapl",    action="store_true", default=True)
     p.add_argument("--collect-temp",    action="store_true")
     p.add_argument("--dry-run",         action="store_true")
+    add_agentsysperf_args(p)
     return p.parse_args()
 
 
@@ -260,6 +265,21 @@ def main() -> None:
     rw = ResultsJsonWriter(output_dir=out_dir, run_id=run_id)
     rw.add_row(common_data=common_data, rapl_data=tm.rapl_mean)
     rw.save()
+
+    if not args.dry_run:
+        emit_agentsysperf_artifacts(
+            output_dir=out_dir,
+            workload=BENCHMARK,
+            run_id=run_id,
+            vcpus=cpu.get_total_cores(),
+            bench_results=bench_results,
+            tm=tm,
+            args=args,
+            tasks_total_key="tasks_total",
+            tasks_completed_key="tasks_completed",
+            runtime_key="total_runtime_s",
+            active_agents=args.num_envs,
+        )
 
     print(f"\n[osworld] success_rate : {bench_results.get('success_rate')}")
     print(f"[osworld] Results      : {out_dir}")

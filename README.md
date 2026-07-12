@@ -322,6 +322,16 @@ python3 scripts/inference/start_llamacpp.py --model 8b --models-dir assets/model
 | AppWorld | `task_completion_rate`, SGC | % |
 | T-Bench | `tool_accuracy` | % |
 
+**AgentSysPerf** (normalized cross-workload layer, see [`docs/agentsysperf.md`](docs/agentsysperf.md)):
+
+| Category | Metric | Unit |
+|---|---|---|
+| Capacity | `active_agents_per_vcpu` | agents/vCPU |
+| Latency | `loop_latency_p50/p95/p99_ms` | ms |
+| Cost | `cost_per_completed_task_usd` | $/task |
+| SLA | `slo_passed`, `slo_failure_reason` | bool / string |
+| Phase timing | `admit/retrieve/act/decision/commit_ms` | ms |
+
 ---
 
 ## Results Format
@@ -330,6 +340,9 @@ See [`results/README.md`](results/README.md). Each run writes:
 - `results/<benchmark>/<run_id>/results.csv` — flat row with all system + benchmark KPIs
 - `results/<benchmark>/<run_id>/results.json` — structured JSON with system metadata, results, EMON, RAPL
 - `results/<benchmark>/<run_id>/telemetry/` — raw EMON data + EDP output
+- `results/<benchmark>/<run_id>/agentsysperf_summary.json` / `.csv`, `phase_metrics.csv`,
+  `slo_evaluation.json` — normalized AgentSysPerf KPI/SLA/phase artifacts (additive; see
+  [`docs/agentsysperf.md`](docs/agentsysperf.md))
 
 ---
 

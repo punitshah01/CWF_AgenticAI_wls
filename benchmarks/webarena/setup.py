@@ -1011,7 +1011,7 @@ def generate_test_data_and_login(host: str, venv_path: str,
                 "Most WebArena tasks require these to be logged in — retrying once "
                 "after a short wait...", "error")
             time.sleep(20)
-            result2 = subprocess.run(
+            subprocess.run(
                 [python, str(auto_login_wrapper)],
                 cwd=workdir, env=env
             )

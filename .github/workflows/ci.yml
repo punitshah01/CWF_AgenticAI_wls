@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Python Lint (ruff)
@@ -25,7 +28,25 @@ jobs:
             scripts/inference/ \
             scripts/prefetch_assets.py \
             setup/ \
+            tests/ \
             --ignore E501,E402
+
+  agentsysperf-tests:
+    name: AgentSysPerf unit + integration tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test deps
+        run: pip install pytest pyyaml
+      - name: Run AgentSysPerf test suite
+        run: python3 -m pytest tests/ -v
+      - name: Fail on missing normalized KPI fields or broken backward compatibility
+        run: |
+          python3 -m pytest tests/agentsysperf/test_backward_compat.py \
+            tests/agentsysperf/test_integration_smoke.py -v
 
   import-smoke:
     name: Import Smoke Test
@@ -44,6 +65,9 @@ jobs:
           from common.platform_info import detect_platform, get_platform_info
           from common.csv_writer import write_csv_row
           from common.json_results import ResultsJsonWriter
+          from common.agentsysperf import build_run_summary, write_run_artifacts
+          from common.agentsysperf.sweep import run_concurrency_sweep, write_sweep_artifacts
+          from common.agentsysperf.merge import merge_run_summaries
           print('All common imports OK')
           "
       - name: Verify setup.py --list
@@ -123,4 +147,34 @@ jobs:
             --skip-docker \
             --skip-conda \
             --skip-pip
+      - name: Smoke — AgentSysPerf summary artifacts (schema check)
+        run: |
+          python3 -c "
+          import sys; sys.path.insert(0, '.')
+          from pathlib import Path
+          from common.agentsysperf.models import CostModelConfig, SLOConfig
+          from common.agentsysperf.summary import build_run_summary, write_run_artifacts
+
+          summary = build_run_summary(
+              workload='tbench', run_id='ci_smoke', active_agents=2, vcpus=64,
+              runtime_s=3600, tasks_total=10, tasks_completed=8,
+              loop_latencies_ms=[100, 200, 300],
+              cost_cfg=CostModelConfig(node_hourly_usd=5.0, runtime_s=3600),
+              slo_cfg=SLOConfig(p95_latency_ms_max=1000),
+          )
+          out_dir = Path('/tmp/agentsysperf_ci_smoke')
+          written = write_run_artifacts(out_dir, summary)
+          required = {'summary_json', 'summary_csv', 'phase_csv', 'slo_json'}
+          missing = required - set(written.keys())
+          assert not missing, f'Missing AgentSysPerf artifacts: {missing}'
+          for path in written.values():
+              assert path.exists(), f'{path} was not written'
+          required_kpi = {
+              'active_agents_per_vcpu', 'loop_latency_p95_ms', 'loop_latency_p99_ms',
+              'cost_per_completed_task_usd', 'slo_passed', 'slo_failure_reason',
+          }
+          missing_kpi = required_kpi - set(summary['kpi'].keys())
+          assert not missing_kpi, f'Missing required normalized KPI fields: {missing_kpi}'
+          print('AgentSysPerf smoke check OK')
+          "
 

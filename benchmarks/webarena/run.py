@@ -102,6 +102,10 @@ from common.json_results import ResultsJsonWriter
 from common.telemetry import TelemetryManager
 from common.telemetry.emon import EmonCollector
 from common.cli_utils import setup_tee_logging, teardown_logging
+from common.agentsysperf.runner_integration import (
+    add_agentsysperf_args,
+    emit_agentsysperf_artifacts,
+)
 from benchmarks.webarena.lib.ollama_metrics import OllamaMetricsProxy
 
 BENCHMARK = "webarena"
@@ -199,6 +203,7 @@ def parse_args() -> argparse.Namespace:
                          "(EMON already captures power counters).")
     p.add_argument("--collect-temp",    action="store_true")
     p.add_argument("--dry-run",         action="store_true")
+    add_agentsysperf_args(p)
     return p.parse_args()
 
 
@@ -1332,6 +1337,36 @@ def main() -> None:
                     str(_pt.get("avg_ttft_ms",           "")),
                 ]
                 write_csv_row(_pt_csv, _pt_header, _pt_row, verbose=False)
+
+        # ── AgentSysPerf: normalized KPI/SLA/cost/phase artifacts ──────────────
+        # WebArena has true per-task timing (per_task_results[*]['runtime_s']),
+        # so it gets a *measured* loop-latency distribution rather than the
+        # best-effort single-sample approximation used by coarser workloads.
+        if not args.dry_run:
+            _true_latencies_ms = [
+                float(_pt["runtime_s"]) * 1000.0
+                for _pt in per_task_results
+                if _pt.get("runtime_s") not in (None, "")
+            ]
+            _tokens_total = sum(
+                int(_pt.get("prompt_tokens") or 0) + int(_pt.get("completion_tokens") or 0)
+                for _pt in per_task_results
+            )
+            emit_agentsysperf_artifacts(
+                output_dir=out_dir,
+                workload=BENCHMARK,
+                run_id=run_id,
+                vcpus=cpu.get_total_cores(),
+                bench_results=bench_results,
+                tm=tm,
+                args=args,
+                tasks_total_key="n_tasks",
+                tasks_completed_key="tasks_completed",
+                runtime_key="total_runtime_s",
+                loop_latencies_ms=_true_latencies_ms or None,
+                tokens_total=_tokens_total,
+                latency_approximation=None if _true_latencies_ms else "uniform_avg_from_total_runtime",
+            )
 
         # ── Write summary.csv: one row PER TASK with KPI + system metadata,
         # SYSTEM VIEW ONLY (mirrors pnpwls/speccpu's primary results CSV

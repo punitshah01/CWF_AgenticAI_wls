@@ -140,6 +140,10 @@ Every benchmark writes its outputs to
 - `telemetry/` — raw EMON artifacts, `mpp.py` post-processed summaries, RAPL/temperature CSVs
   (present even when telemetry collection is skipped, so the folder shape stays predictable)
 - benchmark-specific artifacts (e.g. SWE-bench `predictions/*.jsonl`, WebArena per-task logs)
+- `agentsysperf_summary.json` / `.csv`, `phase_metrics.csv`, `slo_evaluation.json` —
+  normalized cross-workload KPI/SLA/phase-timing artifacts, additive to the files above.
+  See [`docs/agentsysperf.md`](agentsysperf.md) for the full KPI contract, SLA/cost model
+  formulas, phase mapping, and concurrency-sweep capacity analysis.
 
 ### `results.json`
 Written by the shared `common.json_results.ResultsJsonWriter` — identical
